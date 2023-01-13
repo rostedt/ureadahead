@@ -221,6 +221,16 @@ static int reset_event(struct tracefs_instance *instance,
 	return ret;
 }
 
+static void drop_cache(void)
+{
+	int fd;
+
+	fd = open("/proc/sys/vm/drop_caches", O_WRONLY);
+	nih_assert (fd >= 0);
+	write(fd, "1", 1);
+	close(fd);
+}
+
 static void free_device(struct device_data *dev)
 {
 	struct inode_data *inode;
@@ -261,7 +271,8 @@ trace (int daemonise,
        const char *path_prefix_filter,
        const PathPrefixOption *path_prefix,
        int use_existing_trace,
-       int force_ssd_mode)
+       int force_ssd_mode,
+       int drop_caches)
 {
 	const char *systems[] = { "filemap", NULL };
 	struct tracefs_instance *instance = NULL;
@@ -315,6 +326,14 @@ trace (int daemonise,
 		if (enable_event (instance, "filemap", "mm_filemap_add_to_page_cache",
 				  &old_event_enabled) < 0)
 			goto error;
+
+		/*
+		 * There may be a lot of files being read while this was being
+		 * setup. Drop the file caches to force the applications to
+		 * reload if needed, and that will be recorded in the trace.
+		 */
+		if (drop_caches)
+			drop_cache();
 
 		if (tracefs_trace_on(instance))
 			goto error;

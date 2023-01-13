@@ -126,6 +126,14 @@ static int use_existing_trace = FALSE;
  */
 static int force_ssd_mode = FALSE;
 
+/**
+ * drop_caches:
+ *
+ * Force dropping of file system cache before starting the trace. This
+ * will trace all pages that are pulled in.
+ */
+static int drop_caches = FALSE;
+
 static int
 path_prefix_option (NihOption  *option,
                     const char *arg)
@@ -231,6 +239,8 @@ static NihOption options[] = {
 	  NULL, NULL, &use_existing_trace, NULL },
 	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
 	  NULL, NULL, &force_ssd_mode, NULL },
+	{ 0, "drop-caches", N_("force dropping caches before starting trace"),
+	  NULL, NULL, &drop_caches, NULL },
 
 	NIH_OPTION_LAST
 };
@@ -322,7 +332,7 @@ main (int   argc,
 	/* Trace to generate new pack files */
 	if (trace (daemonise, timeout, filename, pack_file,
 		   path_prefix_filter, &path_prefix, use_existing_trace,
-		   force_ssd_mode) < 0) {
+		   force_ssd_mode, drop_caches) < 0) {
 		NihError *err;
 
 		err = nih_error_get ();

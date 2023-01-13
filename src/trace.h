@@ -39,7 +39,8 @@ int trace (int daemonise, int timeout,
            const char *path_prefix_filter,  /* May be null */
            const PathPrefixOption *path_prefix,
            int use_existing_trace,
-           int force_ssd_mode);
+           int force_ssd_mode,
+	   int drop_caches);
 
 NIH_END_EXTERN
 
