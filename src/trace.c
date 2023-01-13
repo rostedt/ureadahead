@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/syscall.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -42,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <tracefs.h>
+#include <dirent.h>
 
 #include <blkid.h>
 #define NO_INLINE_FUNCS
@@ -63,13 +65,6 @@
 #include "pack.h"
 #include "values.h"
 #include "file.h"
-
-/**
- * FS_SYSTEM:
- *
- * The name of the system that has the events we care about.
- */
-#define FS_SYSTEM "fs"
 
 /**
  * PATH_DEBUGFS:
@@ -100,30 +95,94 @@
  **/
 #define INODE_GROUP_PRELOAD_THRESHOLD 8
 
+#define HASH_BITS 16
+#define HASH_SIZE (1 << HASH_BITS) // 16384
+#define HASH_MASK (HASH_SIZE - 1)
+
+#define ARRAY_START_MARK	((unsigned long)-1)
+
+#define _STRINGIFY(x) #x
+#define STRINGIFY(x) _STRINGIFY(x)
+
+#define BUF_SIZE 32768
+
+typedef unsigned long long u64;
+typedef long long s64;
+
+/* glibc does not define getdents64() */
+struct linux_dirent64 {
+	u64		d_ino;
+	s64		d_off;
+	unsigned short	d_reclen;
+	unsigned char	d_type;
+	char		d_name[];
+};
+#define getdents64(fd, dirp, count) syscall(SYS_getdents64, fd, buf, BUF_SIZE);
+
+struct file_map {
+	off_t				start;
+	off_t				end;
+};
+
+struct inode_data {
+	struct inode_data		*next;
+	unsigned long			inode;
+	struct file_map			*map;
+	int				nr_maps;
+	int				order;
+	char				*name;
+};
+
+struct device_data {
+	struct device_data		*next;
+	int				id;
+	int				nr_inodes;
+	struct inode_data		*inodes;
+};
+
+struct trace_data {
+	struct tracefs_instance		*instance;
+	struct tep_handle		*tep;
+	struct tep_event		*filemap_event;
+	struct tep_format_field		*filemap_inode;
+	struct tep_format_field		*filemap_index;
+	struct tep_format_field		*filemap_device;
+	struct device_data		*device_hash[HASH_SIZE];
+	int				next_inode;
+};
+
+
 
 /* Prototypes for static functions */
-static int       read_trace        (const void *parent,
-				    struct tracefs_instance *instance, const char *path,
-				    const char *path_prefix_filter,
-				    const PathPrefixOption *path_prefix,
+static int       read_trace        (struct trace_data *data,
 				    PackFile **files, size_t *num_files,
 				    int force_ssd_mode);
-static void      fix_path          (char *pathname);
-static int       trace_add_path    (const void *parent, const char *pathname,
+
+static int       trace_add_path    (struct inode_data *inode, const char *pathname,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
 static int       ignore_path       (const char *pathname);
-static PackFile *trace_file        (const void *parent, dev_t dev,
+static PackFile *trace_file        (dev_t dev,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
-static int       trace_add_chunks  (const void *parent,
+static int       trace_add_chunks  (struct inode_data *inode, const void *parent,
 				    PackFile *file, PackPath *path,
 				    int fd, off_t size);
-static int       trace_add_extents (const void *parent,
-				    PackFile *file, PackPath *path,
-				    int fd, off_t size,
-				    off_t offset, off_t length);
 static int       trace_add_groups  (const void *parent, PackFile *file);
 static int       trace_sort_blocks (const void *parent, PackFile *file);
 static int       trace_sort_paths  (const void *parent, PackFile *file);
+
+static int	 callback          (struct tep_event *event, struct tep_record *record,
+				    int cpu, void *data);
+static void add_file_page(struct trace_data *tdata, int device, unsigned long ino, off_t offset);
+static void add_map(struct inode_data *inode, off_t offset);
+static int cmp_file_map_range(const void *A, const void *B);
+static int cmp_file_map(const void *A, const void *B);
+static struct inode_data *add_inode(struct trace_data *tdata,
+				    struct device_data *dev, unsigned long ino);
+static int cmp_inodes_range(const void *A, const void *B);
+static struct inode_data *find_inode(struct device_data *dev, unsigned long ino);
+static int cmp_inodes(const void *A, const void *B);
+static struct device_data *add_device(struct trace_data *tdata, int id);
+static struct device_data *find_device(struct trace_data *tdata, int id);
 
 
 static void
@@ -162,7 +221,39 @@ static int reset_event(struct tracefs_instance *instance,
 	return ret;
 }
 
-	int
+static void free_device(struct device_data *dev)
+{
+	struct inode_data *inode;
+	int i;
+
+	for (i = 0; i < dev->nr_inodes; i++) {
+		inode = &dev->inodes[i];
+		/* inode->map has one meta data element at the start */
+		inode->map--;
+		free(inode->map);
+		free(inode->name);
+	}
+	/* dev->inodes has one meta data element at the start */
+	dev->inodes--;
+	free(dev->inodes);
+	free(dev);
+}
+
+static void free_trace_data(struct trace_data *tdata)
+{
+	struct device_data *dev;
+	int i;
+
+	for (i = 0; i < HASH_SIZE; i++) {
+		while (tdata->device_hash[i]) {
+			dev = tdata->device_hash[i];
+			tdata->device_hash[i] = dev->next;
+			free_device(dev);
+		}
+	}
+}
+
+int
 trace (int daemonise,
        int timeout,
        const char *filename_to_replace,
@@ -172,11 +263,12 @@ trace (int daemonise,
        int use_existing_trace,
        int force_ssd_mode)
 {
+	const char *systems[] = { "filemap", NULL };
 	struct tracefs_instance *instance = NULL;
+	struct tep_handle	*tep;
+	struct trace_data	data;
 	int                 unmount;
-	int                 old_sys_open_enabled = 0;
-	int                 old_open_exec_enabled = 0;
-	int                 old_uselib_enabled = 0;
+	int                 old_event_enabled = 0;
 	int                 old_tracing_enabled = 0;
 	int                 old_buffer_size_kb = 0;
 	const char         *tracing_dir = NULL;
@@ -206,36 +298,47 @@ trace (int daemonise,
 
 	old_tracing_enabled = tracefs_trace_is_on(instance);
 
-	/* Enable tracing of open() syscalls */
 	if (! use_existing_trace) {
-		/* Do not trace the tracer */
-		tracefs_trace_off(instance);
-		if (enable_event (instance, FS_SYSTEM, "do_sys_open",
-				  &old_sys_open_enabled) < 0)
+		/* Start tracing as soon as possible */
+		old_buffer_size_kb = tracefs_instance_get_buffer_size(instance, -1);
+		if (old_buffer_size_kb < 0)
 			goto error;
-		if (enable_event (instance, FS_SYSTEM, "open_exec",
-				  &old_open_exec_enabled) < 0)
+
+		/* buffer size is per cpu */
+		old_buffer_size_kb /= num_cpus;
+		if (tracefs_instance_set_buffer_size (instance, 8192, -1) < 0)
 			goto error;
-		if (enable_event (instance, FS_SYSTEM, "uselib",
-				  &old_uselib_enabled) < 0) {
-			NihError *err;
 
-			err = nih_error_get ();
-			nih_debug ("Missing uselib tracing: %s", err->message);
-			nih_free (err);
+		old_tracing_enabled = tracefs_trace_is_on(instance);
 
-			old_uselib_enabled = -1;
-		}
+		/* Enable tracing of loading pages from the block devices */
+		if (enable_event (instance, "filemap", "mm_filemap_add_to_page_cache",
+				  &old_event_enabled) < 0)
+			goto error;
+
+		if (tracefs_trace_on(instance))
+			goto error;
 	}
-	old_buffer_size_kb = tracefs_instance_get_buffer_size(instance, -1);
-	if (old_buffer_size_kb < 0)
-		goto error;
-	/* buffer size is per cpu */
-	old_buffer_size_kb /= num_cpus;
-	if (tracefs_instance_set_buffer_size (instance, 8192, -1) < 0)
-		goto error;
-	if (tracefs_trace_on(instance))
-		goto error;
+
+	tep = tracefs_local_events_system(NULL, systems);
+	nih_assert (tep != NULL);
+
+	memset(&data, 0, sizeof(data));
+
+	data.tep = tep;
+	data.instance = instance;
+
+	data.filemap_event = tep_find_event_by_name(tep, NULL, "mm_filemap_add_to_page_cache");
+	nih_assert (data.filemap_event != NULL);
+
+	data.filemap_inode = tep_find_field(data.filemap_event, "i_ino");
+	nih_assert (data.filemap_inode != NULL);
+
+	data.filemap_index = tep_find_field(data.filemap_event, "index");
+	nih_assert (data.filemap_index != NULL);
+
+	data.filemap_device = tep_find_field(data.filemap_event, "s_dev");
+	nih_assert (data.filemap_device != NULL);
 
 	if (daemonise) {
 		pid_t pid;
@@ -272,12 +375,8 @@ trace (int daemonise,
 	if (! use_existing_trace) {
 		tracefs_trace_off(instance);
 
-		if (old_uselib_enabled >= 0)
-			if (reset_event(instance, FS_SYSTEM, "uselib", 1) < 0)
-				goto error;
-		if (reset_event(instance, FS_SYSTEM, "open_exec", old_open_exec_enabled) < 0)
-			goto error;
-		if (reset_event(instance, FS_SYSTEM, "do_sys_open", old_sys_open_enabled) < 0)
+		if (reset_event(instance, "filemap", "mm_filemap_add_to_page_cache",
+				old_event_enabled) < 0)
 			goto error;
 	}
 
@@ -285,23 +384,28 @@ trace (int daemonise,
 	if (nice (15))
 		;
 
-	/* Read trace log */
-	if (read_trace (NULL, instance, "trace", path_prefix_filter, path_prefix,
-			&files, &num_files, force_ssd_mode) < 0)
+	/* Read the pages that were traced */
+	if (read_trace (&data, &files, &num_files, force_ssd_mode))
 		goto error;
 
-	/* Restore previous tracing settings */
-	if (old_tracing_enabled)
-		tracefs_trace_on(instance);
-	else
-		tracefs_trace_off(instance);
+	tep_free(tep);
+	free_trace_data(&data);
 
-	/*
-	 * Restore the trace buffer size (which has just been read) and free
-	 * a bunch of memory.
-	 */
-	if (tracefs_instance_set_buffer_size(instance, old_buffer_size_kb, -1) < 0)
-		goto error;
+
+	if (! use_existing_trace) {
+		/* Restore previous tracing settings */
+		if (old_tracing_enabled)
+			tracefs_trace_on(instance);
+		else
+			tracefs_trace_off(instance);
+
+		/*
+		 * Restore the trace buffer size (which has just been read) and free
+		 * a bunch of memory.
+		 */
+		if (tracefs_instance_set_buffer_size(instance, old_buffer_size_kb, -1) < 0)
+			goto error;
+	}
 
 	/* Unmount the temporary debugfs mount if we mounted it */
 	if (unmount
@@ -367,169 +471,597 @@ error:
 	return -1;
 }
 
-struct event_data {
-	struct tep_event	*do_sys_open;
-	struct tep_event	*open_exec;
-	struct tep_event	*uselib;
-	const void		*parent;
-	const char		*path;
-	const char		*path_prefix_filter;
-	const PathPrefixOption	*path_prefix;
-	PackFile		** files;
-	size_t			*num_files;
-	int			force_ssd_mode;
+/* This gets called for every event in the ring buffer in order */
+static int callback(struct tep_event *event, struct tep_record *record, int cpu,
+		    void *data)
+{
+	struct trace_data *tdata = data;
+	unsigned long long ino;
+	unsigned long long device;
+	unsigned long long index;
+
+	if (event->id != tdata->filemap_event->id)
+		return 0;
+
+	if (tep_read_number_field(tdata->filemap_inode, record->data, &ino) < 0)
+		return 1;
+
+	if (tep_read_number_field(tdata->filemap_device, record->data, &device) < 0)
+		return 1;
+
+	if (tep_read_number_field(tdata->filemap_index, record->data, &index) < 0)
+		return 1;
+
+
+	add_file_page(tdata, device, ino, index);
+
+	return 0;
+}
+
+/*
+ * The mm_filemap_add_to_page_cache event was read and gives the device, inode number,
+ * and page index. Note the offset into the file that this page is for is found by:
+ *  offset = index * page_size
+ */
+static void add_file_page(struct trace_data *tdata, int device, unsigned long ino, off_t index)
+{
+	struct device_data *dev;
+	struct inode_data *inode;
+	struct file_map *map;
+	struct file_map key;
+	int idx;
+
+	dev = find_device(tdata, device);
+	if (!dev)
+		dev = add_device(tdata, device);
+
+	inode = find_inode(dev, ino);
+	if (!inode)
+		inode = add_inode(tdata, dev, ino);
+
+	key.start = index;
+	key.end = index + 1;
+
+	/*
+	 * The cmp_file_map will match not only if it finds a mapping that the
+	 * index is in, but also if the index is at the end of a mapping or
+	 * the begging of one. In the latter case, it will return the mapping
+	 * that touchs the index.
+	 */
+	map = bsearch(&key, inode->map, inode->nr_maps, sizeof(key), cmp_file_map);
+	if (!map) {
+		/* A new index that also does not touch a mapping. */
+		add_map(inode, index);
+		return;
+	}
+
+	if (map->start <= index && map->end > index)
+		/* Nothing to do, it is already accounted for */
+		return;
+
+	/* index is after the mapping, extend the mapping */
+	if (map->end == index) {
+		/* The size of the new index is just one (page_size) */
+		map->end++;
+
+		/* If this mapping is the last one, then we are done */
+		if ((map - inode->map) == (inode->nr_maps - 1))
+			return;
+	} else {
+		/* The index is just ahead of this mapping (make sure of that) */
+		nih_assert( map->start == index + 1);
+
+		/* The size of the new index is just one (page_size) */
+		map->start--;
+
+		/* If this mapping is the first one, then we are done */
+		if (map == inode->map)
+			return;
+
+		/* The following code looks to see if we need to merge mappings */
+		map--;
+	}
+
+	/* If the addition of this index connected two mappings then merge them. */
+	if (map->end != map[1].start)
+		return;
+
+	/* Merge the two maps */
+	map->end = map[1].end;
+	map++;
+	idx = map - inode->map;
+	inode->nr_maps--;
+
+	/* If the second map was not at the end, then adjust the inode map array */
+	if (idx < inode->nr_maps)
+		memmove(map, &map[1], sizeof(*map) * (inode->nr_maps - idx));
+}
+
+/* Returns a match if A is within or touches B */
+static int cmp_file_map(const void *A, const void *B)
+{
+	const struct file_map *a = A;
+	const struct file_map *b = B;
+
+	if (a->end < b->start)
+		return -1;
+
+	return b->end < a->start;
+}
+
+/*
+ * Insert this new index into the inode array.
+ * Note, the inode array has a meta data element before it that has
+ * ARRAY_START_MARK as it's "start" element. This is to help the
+ * cmp_file_map_range() function to know if the new index is between
+ * two other indexes, as it returns the mapping after the index when
+ * the index is before it. To do so, it needs to check the element before the
+ * element being tested. In order to test the first element (without knowing
+ * that it is on the first element), it needs to look before that element.
+ * The ARRAY_START_MARK element will be the element before the first one.
+ */
+static void add_map(struct inode_data *inode, off_t index)
+{
+	struct file_map *map;
+	struct file_map key;
+	int idx;
+
+	/* Handle the first two trivial cases */
+	switch (inode->nr_maps) {
+	case 0:
+		/* Allocate 2: 1 for this element an 1 for the ARRAY_START_MARK */
+		map = malloc(sizeof(*inode->map) * 2);
+		nih_assert (map != NULL);
+
+		/* Add a buffer element at the beginning for cmp_file_map_range() */
+		map->start = ARRAY_START_MARK;
+		/* The inode->map will skip over that element */
+		map++;
+		inode->map = map;
+		break;
+	case 1:
+		/* The allocated array starts one element before the inode->map */
+		map = inode->map - 1;
+		/* Allocate three. 2 for the elements and one for the ARRAY_START_MARK */
+		map = realloc(map, sizeof(*inode->map) * 3);
+		nih_assert (map != NULL);
+
+		inode->map = map + 1;
+
+		/* If the current element is greater than the new one, then move it */
+		if (inode->map[0].start > index) {
+			inode->map[1] = inode->map[0];
+			map = &inode->map[0];
+		} else
+			map = &inode->map[1];
+		break;
+	default:
+		key.start = index;
+		key.end = index + 1;
+
+		/*
+		 * The cmp_file_map_range() will return the map that is after
+		 * the index (or NULL if the index is greater than all existing
+		 * maps).
+		 */
+		map = bsearch(&key, inode->map, inode->nr_maps, sizeof(*map),
+			      cmp_file_map_range);
+		/*
+		 * Find the index into the array that this new map index will
+		 * be inserted.
+		 */
+		if (map)
+			idx = map - inode->map;
+		else
+			idx = inode->nr_maps;
+		/* Set map to the start of the allocation */
+		map = inode->map - 1;
+		map = realloc(map, sizeof(*map) * (inode->nr_maps + 2));
+		nih_assert (map != NULL);
+		map++;
+		inode->map = map;
+
+		/* If the new index is not at the end, make room for it */
+		if (idx < inode->nr_maps)
+			memmove(&map[idx + 1], &map[idx],
+				sizeof(*map) * (inode->nr_maps - idx));
+		map = &map[idx];
+	}
+	map->start = index;
+	map->end = index + 1;
+	inode->nr_maps++;
+}
+
+/*
+ * Range is called when the offset does not touch any of the
+ * existing mappings.
+ *
+ * Returns NULL, if A is bigger than all the other elements.
+ * Otherwise, returns the element just after A.
+ */
+static int cmp_file_map_range(const void *A, const void *B)
+{
+	const struct file_map *a = A;
+	const struct file_map *b2 = B;
+	const struct file_map *b1 = b2 - 1;
+
+	if (a->end < b2->start) {
+		/* Check if a is between b1 and b2 */
+		if (b1->start == ARRAY_START_MARK || a->start > b1->end)
+			return 0;
+		else
+			return -1;
+	}
+
+	/*
+	 * This is only called when a search failed,
+	 * so a should never be within b.
+	 * If we are here, then a > b.
+	 */
+	return 1;
+}
+
+/*
+ * add_inode() works the same as add_map() above. Where it creates an
+ * array that has a meta element at the start to use for searching
+ * for the location between to other elements.
+ */
+static struct inode_data *add_inode(struct trace_data *tdata,
+				    struct device_data *dev, unsigned long ino)
+{
+	struct inode_data *inode;
+	struct inode_data key;
+	int index;
+
+	switch (dev->nr_inodes) {
+	case 0:
+		/* Add a marker to the beginning of the array for the range compare */
+		inode = malloc(sizeof(key) * 2);
+		nih_assert (inode != NULL);
+		inode->inode = ARRAY_START_MARK;
+		inode++;
+		dev->inodes = inode;
+		break;
+	case 1:
+		inode = dev->inodes - 1;
+		inode = realloc(inode, sizeof(key) * 3);
+		nih_assert (inode != NULL);
+		dev->inodes = inode + 1;
+
+		/* If the current element is greater than the new one, then move it */
+		if (dev->inodes[0].inode > ino) {
+			dev->inodes[1] = dev->inodes[0];
+			inode = &dev->inodes[0];
+		} else
+			inode = &dev->inodes[1];
+		break;
+	default:
+		key.inode = ino;
+
+		/*
+		 * Returns the inode after the current one, or NULL
+		 * if it's the first one.
+		 */
+		inode = bsearch(&key, dev->inodes, dev->nr_inodes, sizeof(key),
+			      cmp_inodes_range);
+		if (inode)
+			index = inode - dev->inodes;
+		else
+			index = dev->nr_inodes;
+
+		/* Set to the start of the allocated array */
+		inode = dev->inodes - 1;
+		inode = realloc(inode, sizeof(key) * (dev->nr_inodes + 2));
+		nih_assert (inode != NULL);
+		inode++;
+		dev->inodes = inode;
+
+		/* Make room for the new inode if it's not at the end of the array */
+		if (index < dev->nr_inodes)
+			memmove(&inode[index + 1], &inode[index],
+				sizeof(key) * (dev->nr_inodes - index));
+		inode = &inode[index];
+	}
+	memset(inode, 0, sizeof(*inode));
+	inode->inode = ino;
+	dev->nr_inodes++;
+	/* Keep track of the order of inodes as they are found */
+	inode->order = tdata->next_inode++;
+	return inode;
+}
+
+/*
+ * Compare to cause bsearch to:
+ *
+ * Return NULL, if A is bigger than all the other elements.
+ * Otherwise, return the element just after A.
+ */
+static int cmp_inodes_range(const void *A, const void *B)
+{
+	const struct inode_data *a = A;
+	const struct inode_data *b2 = B;
+	const struct inode_data *b1 = b2 - 1;
+
+	if (a->inode < b2->inode) {
+		/* if a is between b1 and b2, then it's a match */
+		if (b1->inode == ARRAY_START_MARK || a->inode > b1->inode)
+			return 0;
+		else
+			return -1;
+	}
+
+	/*
+	 * This is only called when a search failed,
+	 * so a->inode should never equal b->node.
+	 * If we are here, then a > b.
+	 */
+	return 1;
+}
+
+static struct inode_data *find_inode(struct device_data *dev, unsigned long ino)
+{
+	struct inode_data key;
+
+	key.inode = ino;
+
+	/* Returns a map that just touches the offset */
+	return bsearch(&key, dev->inodes, dev->nr_inodes, sizeof(key), cmp_inodes);
+}
+
+static int cmp_inodes(const void *A, const void *B)
+{
+	const struct inode_data *a = A;
+	const struct inode_data *b = B;
+
+	if (a->inode < b->inode)
+		return -1;
+
+	return a->inode > b->inode;
+}
+
+static struct device_data *add_device(struct trace_data *tdata, int id)
+{
+	struct device_data *dev;
+	int key = id & HASH_MASK;
+
+	dev = calloc(1, sizeof(*dev));
+	nih_assert (dev != NULL);
+
+	dev->id = id;
+	dev->next = tdata->device_hash[key];
+	tdata->device_hash[key] = dev;
+
+	return dev;
+}
+
+static struct device_data *find_device(struct trace_data *tdata, int id)
+{
+	struct device_data *dev;
+	int key = id & HASH_MASK;
+
+	for (dev = tdata->device_hash[key]; dev; dev = dev->next) {
+		if (dev->id == id)
+			break;
+	}
+
+	return dev;
+}
+
+struct dir_stack {
+	struct dir_stack		*next;
+	char				*dir;
 };
 
-static int callback(struct tep_event *event, struct tep_record *record, int cpu, void *data)
+static void push_dir(struct dir_stack **dirs, char *dir)
 {
-	struct event_data *edata = data;
-	char *ptr;
-	int len;
+	struct dir_stack *d;
 
-	if ((!edata->do_sys_open || event->id != edata->do_sys_open->id) &&
-	    (!edata->open_exec || event->id != edata->open_exec->id) &&
-	    (!edata->uselib || event->id != edata->uselib->id))
-		return 0;
+	d = malloc(sizeof(*d));
+	nih_assert (d != NULL);
 
-	ptr = tep_get_field_raw(NULL, event, "filename", record, &len, 0);
-	if (!ptr) {
-		nih_warn ("Field 'filename' not found for event %s", event->name);
-		return 0;
-	}
+	d->dir = strdup(dir);
+	nih_assert (d->dir != NULL);
 
-	ptr = strndup(ptr, len);
-	if (!ptr)
-		nih_return_system_error (-1);
-
-	fix_path (ptr);
-
-	if (edata->path_prefix_filter &&
-	    strncmp (ptr, edata->path_prefix_filter,
-		     strlen (edata->path_prefix_filter))) {
-		nih_warn ("Skipping %s due to path prefix filter", ptr);
-		free(ptr);
-		return 0;
-	}
-
-	if (edata->path_prefix->st_dev != NODEV && ptr[0] == '/') {
-		struct stat stbuf;
-		char *rewritten = nih_sprintf (
-		    ptr, "%s%s", edata->path_prefix->prefix, ptr);
-		if (! lstat (rewritten, &stbuf) &&
-		    stbuf.st_dev == edata->path_prefix->st_dev) {
-			/* If |rewritten| exists on the same device as
-			 * path_prefix->st_dev, record the rewritten one
-			 * instead of the original path.
-			 */
-			ptr = rewritten;
-		}
-	}
-	trace_add_path (edata->parent, ptr, edata->files, edata->num_files, edata->force_ssd_mode);
-	free(ptr);
-	return 0;
+	d->next = *dirs;
+	*dirs = d;
 }
 
-static int
-read_trace (const void *parent,
-	    struct tracefs_instance *instance,
-	    const char *path,
-	    const char *path_prefix_filter,  /* May be null */
-	    const PathPrefixOption *path_prefix,
-	    PackFile ** files,
-	    size_t *    num_files,
-	    int         force_ssd_mode)
+static char *pop_dir(struct dir_stack **dirs)
 {
-	int   fd;
-	FILE *fp;
-	char *line;
-	const char *systems[] = { FS_SYSTEM, NULL };
-	struct tep_handle *tep;
-	struct event_data data;
+	struct dir_stack *d = *dirs;
+	char *dir;
 
-	nih_assert (path != NULL);
-	nih_assert (path_prefix != NULL);
-	nih_assert (files != NULL);
-	nih_assert (num_files != NULL);
+	if (!d)
+		return NULL;
 
-	tep = tracefs_local_events_system(NULL, systems);
-	if (!tep)
-		nih_return_system_error (-1);
+	dir = d->dir;
+	*dirs = d->next;
+	free(d);
 
-	data.do_sys_open = tep_find_event_by_name(tep, FS_SYSTEM, "do_sys_open");
-	data.open_exec = tep_find_event_by_name(tep, FS_SYSTEM, "open_exec");
-	data.uselib = tep_find_event_by_name(tep, FS_SYSTEM, "uselib");
+	return dir;
+}
 
-	data.parent = parent;
-	data.path = path;
-	data.path_prefix_filter = path_prefix_filter;
-	data.path_prefix = path_prefix;
-	data.files = files;
-	data.num_files = num_files;
-	data.force_ssd_mode = force_ssd_mode;
+/*
+ * Given a specific device, map files to the recorded inodes. It doesn't
+ * matter if two files have the same inode, only one is needed.
+ * The pages pulled in via one of the inode files via the readahead()
+ * system call will work for all the inodes files.
+ *
+ * Returns the number of inodes that were mapped + inos
+ */
+static int map_inodes(struct device_data *dev, unsigned device, char *fs,
+		      struct inode_data **inodes, int inos)
+{
+	struct inode_data *inode;
+	char filename[PATH_MAX];
+	struct linux_dirent64 *dent;
+	struct stat st;
+	struct dir_stack *dirs = NULL;
+	int found_inos = 0;
+	char buf[BUF_SIZE];
+	char *dir;
+	int bpos;
+	int fd;
+	int n;
 
-	tracefs_trace_off(instance);
+	/*
+	 * Use a stack instead of recursion to process the files in
+	 * an entire directory before going to the next one.
+	 */
+	push_dir(&dirs, fs);
 
-	if (tracefs_iterate_raw_events(tep, instance, NULL, 0, callback, &data) < 0) {
-		nih_return_system_error (-1);
-		tep_free(tep);
+	while ((dir = pop_dir(&dirs))) {
+		/* If we are done, just pop the rest of the dirs */
+		if (found_inos == dev->nr_inodes) {
+			free(dir);
+			continue;
+		}
+
+		fd = open(dir, O_RDONLY | O_DIRECTORY);
+		if (fd < 0)
+			continue;
+
+		/* For root do not append '/' to the files */
+		if (dir[1] == '\0')
+			dir[0] = '\0';
+
+		for (;;) {
+			/* Grab a bunch of entries at once */
+			n = getdents64(fd, buf, BUF_SIZE);
+			if (n <= 0)
+				break;
+
+			for (bpos = 0; bpos < n; bpos += dent->d_reclen) {
+				dent = (struct linux_dirent64 *)(buf + bpos);
+
+				if (strcmp(dent->d_name, ".") == 0 ||
+				    strcmp(dent->d_name, "..") == 0)
+					continue;
+
+				switch(dent->d_type) {
+				case DT_DIR:
+					if (fstatat(fd, dent->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0)
+						continue;
+
+					/* Make sure we stay on this device */
+					if (st.st_dev != device)
+						continue;
+
+					snprintf(filename, PATH_MAX,
+						 "%s/%s", dir, dent->d_name);
+					push_dir(&dirs, filename);
+
+					break;
+				case DT_REG:
+					inode = find_inode(dev, dent->d_ino);
+					if (inode && !inode->name) {
+						snprintf(filename, PATH_MAX,
+							 "%s/%s", dir, dent->d_name);
+						inode->name = strdup(filename);
+						nih_assert (inode->name != NULL);
+						/* Need to sort the inodes by order */
+						inodes[inos++] = inode;
+						/*
+						 * No need to search more
+						 * if we found everything
+						 */
+						if (++found_inos == dev->nr_inodes)
+							goto last;
+					}
+					break;
+				}
+			}
+		}
+ last:
+		close(fd);
+		free(dir);
+	}
+
+	return inos;
+}
+
+static int cmp_inode_order(const void *A, const void *B)
+{
+	struct inode_data * const *a = A;
+	struct inode_data * const *b = B;
+
+	if ((*a)->order < (*b)->order)
 		return -1;
-	}
 
-	tep_free(tep);
+	return (*a)->order > (*b)->order;
+}
+
+static int
+read_trace (struct trace_data *tdata, PackFile **files, size_t *num_files,
+	    int force_ssd_mode)
+{
+	unsigned int major, minor, device;
+	struct inode_data **inodes;
+	struct device_data *dev;
+	char mapname[PATH_MAX];
+	char *line = NULL;
+	size_t len = 0;
+	FILE *fp;
+	int inos = 0;
+	int ret;
+	int i;
+
+	tracefs_iterate_raw_events(tdata->tep, tdata->instance, NULL, 0, callback, tdata);
+
+	/* Fail of nothing was found */
+	if (!tdata->next_inode)
+		return -1;
+
+	/*
+	 * First map the devices found in the trace to the file systems they
+	 * represent.
+	 */
+	fp = fopen("/proc/self/mountinfo", "r");
+
+	/*
+	 * Create an array of all the inodes, to sort them in the order they
+	 * were found in the trace.
+	 */
+	inodes = calloc(tdata->next_inode, sizeof(*inodes));
+	nih_assert (inodes != NULL);
+
+	while (getline(&line, &len, fp) > 0) {
+		ret = sscanf(line, "%*d %*d %d:%d / %"STRINGIFY(PATH_MAX)"s",
+			     &major, &minor, mapname);
+		if (ret != 3)
+			continue;
+
+		/*
+		 * Here's a bit of disconnect. The devices in the trace are
+		 * represented as major << 20 | minor, whereas the devices in
+		 * stat() are represented as major << 8 | minor.
+		 */
+		device = major << 20 | minor;
+		dev = find_device(tdata, device);
+		if (!dev)
+			continue;
+
+		device = makedev(major, minor);
+
+		inos = map_inodes(dev, device, mapname, inodes, inos);
+	}
+	fclose(fp);
+	free(line);
+
+	/* Add the files in order of when they were found */
+	qsort(inodes, inos, sizeof(*inodes), cmp_inode_order);
+
+	for (i = 0; i < inos; i++) {
+		trace_add_path(inodes[i], inodes[i]->name,
+			       files, num_files,
+			       force_ssd_mode);
+	}
 
 	return 0;
 }
 
-static void
-fix_path (char *pathname)
-{
-	char *ptr;
-
-	nih_assert (pathname != NULL);
-
-	for (ptr = pathname; *ptr; ptr++) {
-		size_t len;
-
-		if (ptr[0] != '/')
-			continue;
-
-		len = strcspn (ptr + 1, "/");
-
-		/* // and /./, we shorten the string and repeat the loop
-		 * looking at the new /
-		 */
-		if ((len == 0) || ((len == 1) && ptr[1] == '.')) {
-			memmove (ptr, ptr + len + 1, strlen (ptr) - len);
-			ptr--;
-			continue;
-		}
-
-		/* /../, we shorten back to the previous / or the start
-		 * of the string and repeat the loop looking at the new /
-		 */
-		if ((len == 2) && (ptr[1] == '.') && (ptr[2] == '.')) {
-			char *root;
-
-			for (root = ptr - 1;
-			     (root >= pathname) && (root[0] != '/');
-			     root--)
-				;
-			if (root < pathname)
-				root = pathname;
-
-			memmove (root, ptr + len + 1, strlen (ptr) - len);
-			ptr = root - 1;
-			continue;
-		}
-	}
-
-	while ((ptr != pathname) && (*(--ptr) == '/'))
-		*ptr = '\0';
-}
-
-
 static int
-trace_add_path (const void *parent,
+trace_add_path (struct inode_data *inode,
 		const char *pathname,
 		PackFile ** files,
 		size_t *    num_files,
@@ -627,7 +1159,7 @@ trace_add_path (const void *parent,
 	 * Lookup file based on the dev_t, potentially creating a new
 	 * pack file in the array.
 	 */
-	file = trace_file (parent, statbuf.st_dev, files, num_files, force_ssd_mode);
+	file = trace_file (statbuf.st_dev, files, num_files, force_ssd_mode);
 
 	/* Grow the PackPath array and fill in the details for the new
 	 * path.
@@ -683,7 +1215,7 @@ trace_add_path (const void *parent,
 	/* Now read the in-memory chunks of this file and add those to
 	 * the pack file too.
 	 */
-	trace_add_chunks (*files, file, path, fd, statbuf.st_size);
+	trace_add_chunks (inode, *files, file, path, fd, statbuf.st_size);
 	close (fd);
 
 	return 0;
@@ -716,8 +1248,7 @@ ignore_path (const char *pathname)
 
 
 static PackFile *
-trace_file (const void *parent,
-	    dev_t       dev,
+trace_file (dev_t       dev,
 	    PackFile ** files,
 	    size_t *    num_files,
 	    int         force_ssd_mode)
@@ -767,7 +1298,7 @@ trace_file (const void *parent,
 	/* Grow the PackFile array and fill in the details for the new
 	 * file.
 	 */
-	*files = NIH_MUST (nih_realloc (*files, parent,
+	*files = NIH_MUST (nih_realloc (*files, NULL,
 					(sizeof (PackFile) * (*num_files + 1))));
 
 	file = &(*files)[(*num_files)++];
@@ -785,17 +1316,16 @@ trace_file (const void *parent,
 
 
 static int
-trace_add_chunks (const void *parent,
+trace_add_chunks (struct inode_data *inode,
+		  const void *parent,
 		  PackFile *  file,
 		  PackPath *  path,
 		  int         fd,
 		  off_t       size)
 {
 	static int               page_size = -1;
-	void *                   buf;
-	off_t                    num_pages;
-	nih_local unsigned char *vec = NULL;
 
+	nih_assert (inode != NULL);
 	nih_assert (file != NULL);
 	nih_assert (path != NULL);
 	nih_assert (fd >= 0);
@@ -804,182 +1334,17 @@ trace_add_chunks (const void *parent,
 	if (page_size < 0)
 		page_size = sysconf (_SC_PAGESIZE);
 
-	/* Map the file into memory */
-	buf = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-	if (buf == MAP_FAILED) {
-		nih_warn ("%s: %s: %s", path->path,
-			  _("Error mapping into memory"),
-			  strerror (errno));
-		return -1;
-	}
 
-	/* Grab the core memory map of the file */
-	num_pages = (size - 1) / page_size + 1;
-	vec = NIH_MUST (nih_alloc (NULL, num_pages));
-	memset (vec, 0, num_pages);
-
-	if (mincore (buf, size, vec) < 0) {
-		nih_warn ("%s: %s: %s", path->path,
-			  _("Error retrieving page cache info"),
-			  strerror (errno));
-		munmap (buf, size);
-		return -1;
-	}
-
-	/* Clean up */
-	if (munmap (buf, size) < 0) {
-		nih_warn ("%s: %s: %s", path->path,
-			  _("Error unmapping from memory"),
-			  strerror (errno));
-		return -1;
-	}
-
-
-	/* Now we can figure out which contiguous bits of the file are
-	 * in core memory.
-	 */
-	for (off_t i = 0; i < num_pages; i++) {
+	/* Add all the blocks that were traced being loaded */
+	for (int i = 0; i < inode->nr_maps; i++) {
+		struct file_map *map = &inode->map[i];
+		PackBlock *block;
 		off_t offset;
 		off_t length;
 
-		if (! vec[i])
-			continue;
+		offset = map->start * page_size;
+		length = (map->end - map->start) * page_size;
 
-		offset = i * page_size;
-		length = page_size;
-
-		while (((i + 1) < num_pages) && vec[i + 1]) {
-			length += page_size;
-			i++;
-		}
-
-		/* The rotational crowd need this split down further into
-		 * on-disk extents, the non-rotational folks can just use
-		 * the chunks data.
-		 */
-		if (file->rotational) {
-			trace_add_extents (parent, file, path, fd, size,
-					   offset, length);
-		} else {
-			PackBlock *block;
-
-			file->blocks = NIH_MUST (nih_realloc (file->blocks, parent,
-							      (sizeof (PackBlock)
-							       * (file->num_blocks + 1))));
-
-			block = &file->blocks[file->num_blocks++];
-			memset (block, 0, sizeof (PackBlock));
-
-			block->pathidx = file->num_paths - 1;
-			block->offset = offset;
-			block->length = length;
-			block->physical = -1;
-		}
-	}
-
-	return 0;
-}
-
-struct fiemap *
-get_fiemap (const void *parent,
-	    int         fd,
-	    off_t       offset,
-	    off_t       length)
-{
-	struct fiemap *fiemap;
-
-	nih_assert (fd >= 0);
-
-	fiemap = NIH_MUST (nih_new (parent, struct fiemap));
-	memset (fiemap, 0, sizeof (struct fiemap));
-
-	fiemap->fm_start = offset;
-	fiemap->fm_length = length;
-	fiemap->fm_flags = 0;
-
-	do {
-		/* Query the current number of extents */
-		fiemap->fm_mapped_extents = 0;
-		fiemap->fm_extent_count = 0;
-
-		if (ioctl (fd, FS_IOC_FIEMAP, fiemap) < 0) {
-			nih_error_raise_system ();
-			nih_free (fiemap);
-			return NULL;
-		}
-
-		/* Always allow room for one extra over what we were told,
-		 * so we know if they changed under us.
-		 */
-		fiemap = NIH_MUST (nih_realloc (fiemap, parent,
-						(sizeof (struct fiemap)
-						 + (sizeof (struct fiemap_extent)
-						    * (fiemap->fm_mapped_extents + 1)))));
-		fiemap->fm_extent_count = fiemap->fm_mapped_extents + 1;
-		fiemap->fm_mapped_extents = 0;
-
-		memset (fiemap->fm_extents, 0, (sizeof (struct fiemap_extent)
-						* fiemap->fm_extent_count));
-
-		if (ioctl (fd, FS_IOC_FIEMAP, fiemap) < 0) {
-			nih_error_raise_system ();
-			nih_free (fiemap);
-			return NULL;
-		}
-	} while (fiemap->fm_mapped_extents
-		 && (fiemap->fm_mapped_extents >= fiemap->fm_extent_count));
-
-	return fiemap;
-}
-
-static int
-trace_add_extents (const void *parent,
-		   PackFile *  file,
-		   PackPath *  path,
-		   int         fd,
-		   off_t       size,
-		   off_t       offset,
-		   off_t       length)
-{
-	nih_local struct fiemap *fiemap = NULL;
-
-	nih_assert (file != NULL);
-	nih_assert (path != NULL);
-	nih_assert (fd >= 0);
-	nih_assert (size > 0);
-
-	/* Get the extents map for this chunk, then iterate the extents
-	 * and put those in the pack instead of the chunks.
-	 */
-	fiemap = get_fiemap (NULL, fd, offset, length);
-	if (! fiemap) {
-		NihError *err;
-
-		err = nih_error_get ();
-		nih_warn ("%s: %s: %s", path->path,
-			  _("Error retrieving chunk extents"),
-			  err->message);
-		nih_free (err);
-
-		return -1;
-	}
-
-	for (__u32 j = 0; j < fiemap->fm_mapped_extents; j++) {
-		PackBlock *block;
-		off_t      start;
-		off_t      end;
-
-		if (fiemap->fm_extents[j].fe_flags & FIEMAP_EXTENT_UNKNOWN)
-			continue;
-
-		/* Work out the intersection of the chunk and extent */
-		start = nih_max (fiemap->fm_start,
-				 fiemap->fm_extents[j].fe_logical);
-		end = nih_min ((fiemap->fm_start + fiemap->fm_length),
-			       (fiemap->fm_extents[j].fe_logical
-				+ fiemap->fm_extents[j].fe_length));
-
-		/* Grow the blocks array to add the extent */
 		file->blocks = NIH_MUST (nih_realloc (file->blocks, parent,
 						      (sizeof (PackBlock)
 						       * (file->num_blocks + 1))));
@@ -988,10 +1353,9 @@ trace_add_extents (const void *parent,
 		memset (block, 0, sizeof (PackBlock));
 
 		block->pathidx = file->num_paths - 1;
-		block->offset = start;
-		block->length = end - start;
-		block->physical = (fiemap->fm_extents[j].fe_physical
-				   + (start - fiemap->fm_extents[j].fe_logical));
+		block->offset = offset;
+		block->length = length;
+		block->physical = -1;
 	}
 
 	return 0;
