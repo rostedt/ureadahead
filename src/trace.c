@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <tracefs.h>
 
 #include <blkid.h>
 #define NO_INLINE_FUNCS
@@ -63,6 +64,12 @@
 #include "values.h"
 #include "file.h"
 
+/**
+ * FS_SYSTEM:
+ *
+ * The name of the system that has the events we care about.
+ */
+#define FS_SYSTEM "fs"
 
 /**
  * PATH_DEBUGFS:
@@ -96,10 +103,11 @@
 
 /* Prototypes for static functions */
 static int       read_trace        (const void *parent,
-				    int dfd, const char *path,
+				    struct tracefs_instance *instance, const char *path,
 				    const char *path_prefix_filter,
 				    const PathPrefixOption *path_prefix,
-				    PackFile **files, size_t *num_files, int force_ssd_mode);
+				    PackFile **files, size_t *num_files,
+				    int force_ssd_mode);
 static void      fix_path          (char *pathname);
 static int       trace_add_path    (const void *parent, const char *pathname,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
@@ -123,7 +131,38 @@ sig_interrupt (int signum)
 {
 }
 
-int
+static int enable_event(struct tracefs_instance *instance,
+			const char *system, const char *event, int *enabled)
+{
+	int ret;
+
+	if (enabled)
+		*enabled = tracefs_event_is_enabled(instance, system, event) == TRACEFS_ALL_ENABLED;
+	ret = tracefs_event_enable(instance, system, event);
+	if (ret < 0) {
+		/* fs/uselib may not exist, and that is OK. */
+		errno = ENOENT;
+		nih_return_system_error (-1);
+	}
+	return ret;
+}
+
+static int reset_event(struct tracefs_instance *instance,
+		       const char *system, const char *event, int enabled)
+{
+	int ret;
+
+	if (enabled)
+		ret = tracefs_event_enable(instance, system, event);
+	else
+		ret = tracefs_event_disable(instance, system, event);
+	if (ret < 0)
+		nih_error_raise_system ();
+
+	return ret;
+}
+
+	int
 trace (int daemonise,
        int timeout,
        const char *filename_to_replace,
@@ -133,14 +172,15 @@ trace (int daemonise,
        int use_existing_trace,
        int force_ssd_mode)
 {
-	int                 dfd;
 	FILE                *fp;
-	int                 unmount = FALSE;
+	struct tracefs_instance *instance = NULL;
+	int                 unmount;
 	int                 old_sys_open_enabled = 0;
 	int                 old_open_exec_enabled = 0;
 	int                 old_uselib_enabled = 0;
 	int                 old_tracing_enabled = 0;
 	int                 old_buffer_size_kb = 0;
+	const char         *tracing_dir = NULL;
 	struct sigaction    act;
 	struct sigaction    old_sigterm;
 	struct sigaction    old_sigint;
@@ -149,30 +189,17 @@ trace (int daemonise,
 	size_t              num_files = 0;
 	size_t              num_cpus = 0;
 
-	dfd = open (PATH_TRACEFS, O_NOFOLLOW | O_RDONLY | O_NOATIME);
-	if (dfd < 0) {
-		if (errno != ENOENT)
-			nih_return_system_error (-1);
-
-		dfd = open (PATH_DEBUGFS "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
-	}
-	/* Mount debugfs (and implicitly tracefs) if not already mounted */
-	if (dfd < 0) {
-		if (errno != ENOENT)
-			nih_return_system_error (-1);
-
-		if (mount ("none", PATH_DEBUGFS_TMP, "debugfs", 0, NULL) < 0)
-			nih_return_system_error (-1);
-
-		dfd = open (PATH_DEBUGFS_TMP "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
-		if (dfd < 0) {
-			nih_error_raise_system ();
-			umount (PATH_DEBUGFS_TMP);
-			return -1;
-		}
-
-		unmount = TRUE;
-	}
+	/*
+	 * tracefs_tracing_dir_is_mounted() returns:
+	 *  0 if it was not mounted (but it mounted it)
+	 *  1 if it was already mounted
+	 * -1 on error.
+	 */
+	unmount = tracefs_tracing_dir_is_mounted(true, &tracing_dir);
+	if (umount < 0)
+		return -1;
+	/* Returns 1 if it is already mounted and 0 if it mounted it */
+	unmount = !unmount;
 
 	/*
 	 * Count the number of CPUs, default to 1 on error. 
@@ -196,16 +223,20 @@ trace (int daemonise,
 	if (!num_cpus)
 		num_cpus = 1;
 
+	old_tracing_enabled = tracefs_trace_is_on(instance);
+
+	/* Enable tracing of open() syscalls */
 	if (! use_existing_trace) {
-		/* Enable tracing of open() syscalls */
-		if (set_value (dfd, "events/fs/do_sys_open/enable",
-			       TRUE, &old_sys_open_enabled) < 0)
+		/* Do not trace the tracer */
+		tracefs_trace_off(instance);
+		if (enable_event (instance, FS_SYSTEM, "do_sys_open",
+				  &old_sys_open_enabled) < 0)
 			goto error;
- 		if (set_value (dfd, "events/fs/open_exec/enable",
-			       TRUE, &old_open_exec_enabled) < 0)
+		if (enable_event (instance, FS_SYSTEM, "open_exec",
+				  &old_open_exec_enabled) < 0)
 			goto error;
- 		if (set_value (dfd, "events/fs/uselib/enable",
-			       TRUE, &old_uselib_enabled) < 0) {
+		if (enable_event (instance, FS_SYSTEM, "uselib",
+				  &old_uselib_enabled) < 0) {
 			NihError *err;
 
 			err = nih_error_get ();
@@ -215,10 +246,14 @@ trace (int daemonise,
 			old_uselib_enabled = -1;
 		}
 	}
-	if (set_value (dfd, "buffer_size_kb", 8192/num_cpus, &old_buffer_size_kb) < 0)
+	old_buffer_size_kb = tracefs_instance_get_buffer_size(instance, -1);
+	if (old_buffer_size_kb < 0)
 		goto error;
-	if (set_value (dfd, "tracing_on",
-		       TRUE, &old_tracing_enabled) < 0)
+	/* buffer size is per cpu */
+	old_buffer_size_kb /= num_cpus;
+	if (tracefs_instance_set_buffer_size (instance, 8192, -1) < 0)
+		goto error;
+	if (tracefs_trace_on(instance))
 		goto error;
 
 	if (daemonise) {
@@ -253,20 +288,15 @@ trace (int daemonise,
 	sigaction (SIGTERM, &old_sigterm, NULL);
 	sigaction (SIGINT, &old_sigint, NULL);
 
-	/* Restore previous tracing settings */
-	if (set_value (dfd, "tracing_on",
-		       old_tracing_enabled, NULL) < 0)
-		goto error;
 	if (! use_existing_trace) {
+		tracefs_trace_off(instance);
+
 		if (old_uselib_enabled >= 0)
-			if (set_value (dfd, "events/fs/uselib/enable",
-				       old_uselib_enabled, NULL) < 0)
+			if (reset_event(instance, FS_SYSTEM, "uselib", 1) < 0)
 				goto error;
-		if (set_value (dfd, "events/fs/open_exec/enable",
-			       old_open_exec_enabled, NULL) < 0)
+		if (reset_event(instance, FS_SYSTEM, "open_exec", old_open_exec_enabled) < 0)
 			goto error;
-		if (set_value (dfd, "events/fs/do_sys_open/enable",
-			       old_sys_open_enabled, NULL) < 0)
+		if (reset_event(instance, FS_SYSTEM, "do_sys_open", old_sys_open_enabled) < 0)
 			goto error;
 	}
 
@@ -275,24 +305,26 @@ trace (int daemonise,
 		;
 
 	/* Read trace log */
-	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
+	if (read_trace (NULL, instance, "trace", path_prefix_filter, path_prefix,
 			&files, &num_files, force_ssd_mode) < 0)
 		goto error;
+
+	/* Restore previous tracing settings */
+	if (old_tracing_enabled)
+		tracefs_trace_on(instance);
+	else
+		tracefs_trace_off(instance);
 
 	/*
 	 * Restore the trace buffer size (which has just been read) and free
 	 * a bunch of memory.
 	 */
-	if (set_value (dfd, "buffer_size_kb", old_buffer_size_kb, NULL) < 0)
+	if (tracefs_instance_set_buffer_size(instance, old_buffer_size_kb, -1) < 0)
 		goto error;
 
 	/* Unmount the temporary debugfs mount if we mounted it */
-	if (close (dfd)) {
-		nih_error_raise_system ();
-		goto error;
-	}
 	if (unmount
-	    && (umount (PATH_DEBUGFS_TMP) < 0)) {
+	    && (umount (tracing_dir) < 0)) {
 		nih_error_raise_system ();
 		goto error;
 	}
@@ -348,17 +380,77 @@ trace (int daemonise,
 
 	return 0;
 error:
-	close (dfd);
 	if (unmount)
-		umount (PATH_DEBUGFS_TMP);
+		umount (tracing_dir);
 
 	return -1;
 }
 
+struct event_data {
+	struct tep_event	*do_sys_open;
+	struct tep_event	*open_exec;
+	struct tep_event	*uselib;
+	const void		*parent;
+	const char		*path;
+	const char		*path_prefix_filter;
+	const PathPrefixOption	*path_prefix;
+	PackFile		** files;
+	size_t			*num_files;
+	int			force_ssd_mode;
+};
+
+static int callback(struct tep_event *event, struct tep_record *record, int cpu, void *data)
+{
+	struct event_data *edata = data;
+	char *ptr;
+	int len;
+
+	if ((!edata->do_sys_open || event->id != edata->do_sys_open->id) &&
+	    (!edata->open_exec || event->id != edata->open_exec->id) &&
+	    (!edata->uselib || event->id != edata->uselib->id))
+		return 0;
+
+	ptr = tep_get_field_raw(NULL, event, "filename", record, &len, 0);
+	if (!ptr) {
+		nih_warn ("Field 'filename' not found for event %s", event->name);
+		return 0;
+	}
+
+	ptr = strndup(ptr, len);
+	if (!ptr)
+		nih_return_system_error (-1);
+
+	fix_path (ptr);
+
+	if (edata->path_prefix_filter &&
+	    strncmp (ptr, edata->path_prefix_filter,
+		     strlen (edata->path_prefix_filter))) {
+		nih_warn ("Skipping %s due to path prefix filter", ptr);
+		free(ptr);
+		return 0;
+	}
+
+	if (edata->path_prefix->st_dev != NODEV && ptr[0] == '/') {
+		struct stat stbuf;
+		char *rewritten = nih_sprintf (
+		    ptr, "%s%s", edata->path_prefix->prefix, ptr);
+		if (! lstat (rewritten, &stbuf) &&
+		    stbuf.st_dev == edata->path_prefix->st_dev) {
+			/* If |rewritten| exists on the same device as
+			 * path_prefix->st_dev, record the rewritten one
+			 * instead of the original path.
+			 */
+			ptr = rewritten;
+		}
+	}
+	trace_add_path (edata->parent, ptr, edata->files, edata->num_files, edata->force_ssd_mode);
+	free(ptr);
+	return 0;
+}
 
 static int
 read_trace (const void *parent,
-	    int         dfd,
+	    struct tracefs_instance *instance,
 	    const char *path,
 	    const char *path_prefix_filter,  /* May be null */
 	    const PathPrefixOption *path_prefix,
@@ -369,82 +461,40 @@ read_trace (const void *parent,
 	int   fd;
 	FILE *fp;
 	char *line;
+	const char *systems[] = { FS_SYSTEM, NULL };
+	struct tep_handle *tep;
+	struct event_data data;
 
 	nih_assert (path != NULL);
 	nih_assert (path_prefix != NULL);
 	nih_assert (files != NULL);
 	nih_assert (num_files != NULL);
 
-	fd = openat (dfd, path, O_RDONLY);
-	if (fd < 0)
+	tep = tracefs_local_events_system(NULL, systems);
+	if (!tep)
 		nih_return_system_error (-1);
 
-	fp = fdopen (fd, "r");
-	if (! fp) {
-		nih_error_raise_system ();
-		close (fd);
+	data.do_sys_open = tep_find_event_by_name(tep, FS_SYSTEM, "do_sys_open");
+	data.open_exec = tep_find_event_by_name(tep, FS_SYSTEM, "open_exec");
+	data.uselib = tep_find_event_by_name(tep, FS_SYSTEM, "uselib");
+
+	data.parent = parent;
+	data.path = path;
+	data.path_prefix_filter = path_prefix_filter;
+	data.path_prefix = path_prefix;
+	data.files = files;
+	data.num_files = num_files;
+	data.force_ssd_mode = force_ssd_mode;
+
+	tracefs_trace_off(instance);
+
+	if (tracefs_iterate_raw_events(tep, instance, NULL, 0, callback, &data) < 0) {
+		nih_return_system_error (-1);
+		tep_free(tep);
 		return -1;
 	}
 
-	while ((line = fgets_alloc (NULL, fp)) != NULL) {
-		char *ptr;
-		char *end;
-
-		ptr = strstr (line, " do_sys_open:");
-		if (! ptr)
-			ptr = strstr (line, " open_exec:");
-		if (! ptr)
-			ptr = strstr (line, " uselib:");
-		if (! ptr) {
-			nih_free (line);
-			continue;
-		}
-
-		ptr = strchr (ptr, '"');
-		if (! ptr) {
-			nih_free (line);
-			continue;
-		}
-
-		ptr++;
-
-		end = strrchr (ptr, '"');
-		if (! end) {
-			nih_free (line);
-			continue;
-		}
-
-		*end = '\0';
-
-		fix_path (ptr);
-
-		if (path_prefix_filter &&
-		    strncmp (ptr, path_prefix_filter,
-			     strlen (path_prefix_filter))) {
-			nih_warn ("Skipping %s due to path prefix filter", ptr);
-			continue;
-		}
-
-		if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
-			struct stat stbuf;
-			char *rewritten = nih_sprintf (
-			    line, "%s%s", path_prefix->prefix, ptr);
-			if (! lstat (rewritten, &stbuf) &&
-			    stbuf.st_dev == path_prefix->st_dev) {
-				/* If |rewritten| exists on the same device as
-				 * path_prefix->st_dev, record the rewritten one
-				 * instead of the original path.
-				 */
-				ptr = rewritten;
-			}
-		}
-		trace_add_path (parent, ptr, files, num_files, force_ssd_mode);
-
-		nih_free (line);  /* also frees |rewritten| */
-	}
-
-	if (fclose (fp) < 0)
-		nih_return_system_error (-1);
+	tep_free(tep);
 
 	return 0;
 }
