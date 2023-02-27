@@ -172,7 +172,6 @@ trace (int daemonise,
        int use_existing_trace,
        int force_ssd_mode)
 {
-	FILE                *fp;
 	struct tracefs_instance *instance = NULL;
 	int                 unmount;
 	int                 old_sys_open_enabled = 0;
@@ -187,7 +186,7 @@ trace (int daemonise,
 	struct timeval      tv;
 	nih_local PackFile *files = NULL;
 	size_t              num_files = 0;
-	size_t              num_cpus = 0;
+	ssize_t              num_cpus = 0;
 
 	/*
 	 * tracefs_tracing_dir_is_mounted() returns:
@@ -201,26 +200,8 @@ trace (int daemonise,
 	/* Returns 1 if it is already mounted and 0 if it mounted it */
 	unmount = !unmount;
 
-	/*
-	 * Count the number of CPUs, default to 1 on error. 
-	 */
-	fp = fopen("/proc/cpuinfo", "r");
-	if (fp) {
-		int line_size=1024;
-		char *processor="processor";
-		char *line = malloc(line_size);
-		if (line) {
-			num_cpus = 0;
-			while (fgets(line,line_size,fp) != NULL) {
-				if (!strncmp(line,processor,strlen(processor)))
-					num_cpus++;
-			}
-			free(line);
-			nih_message("Counted %d CPUs\n",num_cpus);
-		}
-		fclose(fp);
-	}
-	if (!num_cpus)
+	num_cpus = sysconf(_SC_NPROCESSORS_CONF);
+	if (num_cpus <= 0)
 		num_cpus = 1;
 
 	old_tracing_enabled = tracefs_trace_is_on(instance);
