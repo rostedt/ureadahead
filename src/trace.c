@@ -127,6 +127,7 @@ struct file_map {
 struct inode_data {
 	struct inode_data		*next;
 	unsigned long			inode;
+	char				*dev_name;
 	struct file_map			*map;
 	int				nr_maps;
 	int				order;
@@ -135,6 +136,7 @@ struct inode_data {
 
 struct device_data {
 	struct device_data		*next;
+	char				*name;
 	int				id;
 	int				nr_inodes;
 	struct inode_data		*inodes;
@@ -246,6 +248,7 @@ static void free_device(struct device_data *dev)
 	/* dev->inodes has one meta data element at the start */
 	dev->inodes--;
 	free(dev->inodes);
+	free(dev->name);
 	free(dev);
 }
 
@@ -309,6 +312,9 @@ trace (int daemonise,
 
 	old_tracing_enabled = tracefs_trace_is_on(instance);
 
+	/* The error path expects data to be initialized */
+	memset(&data, 0, sizeof(data));
+
 	if (! use_existing_trace) {
 		/* Start tracing as soon as possible */
 		old_buffer_size_kb = tracefs_instance_get_buffer_size(instance, -1);
@@ -341,8 +347,6 @@ trace (int daemonise,
 
 	tep = tracefs_local_events_system(NULL, systems);
 	nih_assert (tep != NULL);
-
-	memset(&data, 0, sizeof(data));
 
 	data.tep = tep;
 	data.instance = instance;
@@ -408,8 +412,6 @@ trace (int daemonise,
 		goto error;
 
 	tep_free(tep);
-	free_trace_data(&data);
-
 
 	if (! use_existing_trace) {
 		/* Restore previous tracing settings */
@@ -439,8 +441,7 @@ trace (int daemonise,
 		if (pack_file) {
 			filename = NIH_MUST (nih_strdup (NULL, pack_file));
 		} else {
-			filename = pack_file_name_for_device (NULL,
-							      files[i].dev);
+			filename = pack_file_name_for_mount (NULL, files[i].dev_path);
 			if (! filename) {
 				NihError *err;
 
@@ -482,8 +483,12 @@ trace (int daemonise,
 			pack_dump (&files[i], SORT_OPEN);
 	}
 
+	free_trace_data(&data);
+
 	return 0;
 error:
+	free_trace_data(&data);
+
 	if (unmount)
 		umount (tracing_dir);
 
@@ -980,6 +985,7 @@ static int map_inodes(struct device_data *dev, unsigned device, char *fs,
 						nih_assert (inode->name != NULL);
 						/* Need to sort the inodes by order */
 						inodes[inos++] = inode;
+						inode->dev_name = dev->name;
 						/*
 						 * No need to search more
 						 * if we found everything
@@ -1060,6 +1066,8 @@ read_trace (struct trace_data *tdata, PackFile **files, size_t *num_files,
 		if (!dev)
 			continue;
 
+		dev->name = strdup(mapname);
+		nih_assert(dev->name);
 		device = makedev(major, minor);
 
 		inos = map_inodes(dev, device, mapname, inodes, inos);
@@ -1186,6 +1194,8 @@ trace_add_path (struct inode_data *inode,
 	file->paths = NIH_MUST (nih_realloc (file->paths, *files,
 					     (sizeof (PackPath)
 					      * (file->num_paths + 1))));
+
+	file->dev_path = inode->dev_name;
 
 	path = &file->paths[file->num_paths++];
 	memset (path, 0, sizeof (PackPath));

@@ -54,6 +54,7 @@ typedef struct pack_block {
 
 typedef struct pack_file {
 	dev_t      dev;
+	char *     dev_path;
 	int        rotational;
 	size_t     num_groups;
 	int *      groups;
@@ -76,7 +77,6 @@ NIH_BEGIN_EXTERN
 
 char *    pack_file_name            (const void *parent, const char *arg);
 char *    pack_file_name_for_mount  (const void *parent, const char *mount);
-char *    pack_file_name_for_device (const void *parent, dev_t dev);
 
 PackFile *read_pack                 (const void *parent, const char *filename,
 				     int dump);
