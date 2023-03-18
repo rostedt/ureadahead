@@ -113,7 +113,7 @@ static char *path_prefix_filter = NULL;
 /**
  * use_existing_trace:
  *
- * Set to TRUE if tracing events (tracing/events/fs/*) used to build the pack
+ * Set to TRUE if tracing events (tracing/events/fs/) used to build the pack
  * file are enabled and disabled outside of ureadahead.
  */
 static int use_existing_trace = FALSE;
