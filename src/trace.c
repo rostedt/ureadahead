@@ -130,7 +130,7 @@ trace (int daemonise,
        const char *pack_file,
        const char *path_prefix_filter,
        const PathPrefixOption *path_prefix,
-       int use_existing_trace,
+       int use_existing_trace_events,
        int force_ssd_mode)
 {
 	int                 dfd;
@@ -154,9 +154,9 @@ trace (int daemonise,
 		if (errno != ENOENT)
 			nih_return_system_error (-1);
 
+		/* Mount debugfs (and implicitly tracefs) if not already mounted */
 		dfd = open (PATH_DEBUGFS "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
 	}
-	/* Mount debugfs (and implicitly tracefs) if not already mounted */
 	if (dfd < 0) {
 		if (errno != ENOENT)
 			nih_return_system_error (-1);
@@ -196,7 +196,7 @@ trace (int daemonise,
 	if (!num_cpus)
 		num_cpus = 1;
 
-	if (! use_existing_trace) {
+	if (! use_existing_trace_events) {
 		/* Enable tracing of open() syscalls */
 		if (set_value (dfd, "events/fs/do_sys_open/enable",
 			       TRUE, &old_sys_open_enabled) < 0)
@@ -257,7 +257,7 @@ trace (int daemonise,
 	if (set_value (dfd, "tracing_on",
 		       old_tracing_enabled, NULL) < 0)
 		goto error;
-	if (! use_existing_trace) {
+	if (! use_existing_trace_events) {
 		if (old_uselib_enabled >= 0)
 			if (set_value (dfd, "events/fs/uselib/enable",
 				       old_uselib_enabled, NULL) < 0)
