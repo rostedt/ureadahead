@@ -111,12 +111,14 @@ static char *pack_file = NULL;
 static char *path_prefix_filter = NULL;
 
 /**
- * use_existing_trace:
+ * use_existing_trace_events:
  *
- * Set to TRUE if tracing events (tracing/events/fs/*) used to build the pack
- * file are enabled and disabled outside of ureadahead.
+ * Set to TRUE if trace events (tracing/events/fs/) used to build the pack file
+ * are enabled and disabled outside of ureadahead. Needed if trace events access
+ * is never allowed (while setting buffer size and tracing on/off is allowed) by
+ * the OS's SELinux policy.
  */
-static int use_existing_trace = FALSE;
+static int use_existing_trace_events = FALSE;
 
 /**
  * force_ssd_mode:
@@ -227,8 +229,8 @@ static NihOption options[] = {
 	  NULL, "PREFIX_FILTER", &path_prefix_filter, dup_string_handler },
 	{ 0, "pack-file", N_("Path of the pack file to use"),
 	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
-	{ 0, "use-existing-trace", N_("do not enable or disable tracing events"),
-	  NULL, NULL, &use_existing_trace, NULL },
+	{ 0, "use-existing-trace-events", N_("do not enable or disable trace events"),
+	  NULL, NULL, &use_existing_trace_events, NULL },
 	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
 	  NULL, NULL, &force_ssd_mode, NULL },
 
@@ -321,7 +323,7 @@ main (int   argc,
 
 	/* Trace to generate new pack files */
 	if (trace (daemonise, timeout, filename, pack_file,
-		   path_prefix_filter, &path_prefix, use_existing_trace,
+		   path_prefix_filter, &path_prefix, use_existing_trace_events,
 		   force_ssd_mode) < 0) {
 		NihError *err;
 
