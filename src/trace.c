@@ -189,7 +189,7 @@ trace (int daemonise,
 					num_cpus++;
 			}
 			free(line);
-			nih_message("Counted %d CPUs\n",num_cpus);
+			nih_message("Counted %zu CPUs\n",num_cpus);
 		}
 		fclose(fp);
 	}
