@@ -3,7 +3,7 @@ Section: admin
 Priority: required
 Maintainer: Scott James Remnant <scott@ubuntu.com>
 Standards-Version: 3.9.1
-Build-Depends: debhelper (>= 7.3.15ubuntu3), dh-autoreconf, dh-systemd, autopoint, pkg-config (>= 0.22), libnih-dev (>= 1.0.0), libblkid-dev (>= 2.16), e2fslibs-dev (>= 1.41)
+Build-Depends: debhelper (>= 7.3.15ubuntu3), dh-autoreconf, autopoint, pkg-config (>= 0.22), libnih-dev (>= 1.0.0), libblkid-dev (>= 2.16), libext2fs-dev
 
 Package: ureadahead
 Architecture: any

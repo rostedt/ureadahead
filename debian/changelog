@@ -1,3 +1,10 @@
+ureadahead (0.100.1-0.1) unstable; urgency=low
+
+  * Update dependencies to build on Debian 12 (bookworm). Requires libnih
+    which requires small modification to build.
+
+ -- Junichi Uekawa <dancer@debian.org>  Wed, 18 Oct 2023 22:10:52 +0900
+
 ureadahead (0.100.0-20) artful; urgency=medium
 
   * Do not install upstart system jobs.
