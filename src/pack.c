@@ -833,11 +833,6 @@ do_readahead_ssd (PackFile *file,
 		}
 	}
 
-	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, getpid (),
-		     IOPRIO_IDLE_LOWEST) < 0)
-		nih_warn ("%s: %s", _("Failed to set I/O priority"),
-			  strerror (errno));
-
 	clock_gettime (CLOCK_MONOTONIC, &start);
 
 	ctx.file = file;
@@ -859,6 +854,11 @@ static void *
 ra_thread (void *ptr)
 {
 	struct thread_ctx *ctx = ptr;
+
+	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, 0,
+		     IOPRIO_IDLE_LOWEST) < 0)
+		nih_warn ("%s: %s", _("Failed to set I/O priority"),
+			  strerror (errno));
 
 	for (;;) {
 		size_t i;
