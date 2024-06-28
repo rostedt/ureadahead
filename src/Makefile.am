@@ -19,6 +19,7 @@ ureadahead_SOURCES = \
 	trace.c trace.h \
 	pack.c pack.h \
 	values.c values.h \
+	ranges.c ranges.h \
 	file.c file.h \
 	errors.h
 ureadahead_LDADD = \
