@@ -100,6 +100,12 @@ static int       read_trace        (const void *parent,
 				    const char *path_prefix_filter,
 				    const PathPrefixOption *path_prefix,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
+static int       read_path_trace   (const void *parent,
+				    const char *line,
+				    char *ptr,
+				    const char *path_prefix_filter,
+				    const PathPrefixOption *path_prefix,
+				    PackFile **files, size_t *num_files, int force_ssd_mode);
 static void      fix_path          (char *pathname);
 static int       trace_add_path    (const void *parent, const char *pathname,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
@@ -395,50 +401,11 @@ read_trace (const void *parent,
 			ptr = strstr (line, " open_exec:");
 		if (! ptr)
 			ptr = strstr (line, " uselib:");
-		if (! ptr) {
-			nih_free (line);
-			continue;
+		if (ptr) {
+			read_path_trace (parent, line, ptr,
+				path_prefix_filter, path_prefix,
+				files, num_files, force_ssd_mode);
 		}
-
-		ptr = strchr (ptr, '"');
-		if (! ptr) {
-			nih_free (line);
-			continue;
-		}
-
-		ptr++;
-
-		end = strrchr (ptr, '"');
-		if (! end) {
-			nih_free (line);
-			continue;
-		}
-
-		*end = '\0';
-
-		fix_path (ptr);
-
-		if (path_prefix_filter &&
-		    strncmp (ptr, path_prefix_filter,
-			     strlen (path_prefix_filter))) {
-			nih_warn ("Skipping %s due to path prefix filter", ptr);
-			continue;
-		}
-
-		if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
-			struct stat stbuf;
-			char *rewritten = nih_sprintf (
-			    line, "%s%s", path_prefix->prefix, ptr);
-			if (! lstat (rewritten, &stbuf) &&
-			    stbuf.st_dev == path_prefix->st_dev) {
-				/* If |rewritten| exists on the same device as
-				 * path_prefix->st_dev, record the rewritten one
-				 * instead of the original path.
-				 */
-				ptr = rewritten;
-			}
-		}
-		trace_add_path (parent, ptr, files, num_files, force_ssd_mode);
 
 		nih_free (line);  /* also frees |rewritten| */
 	}
@@ -447,6 +414,59 @@ read_trace (const void *parent,
 		nih_return_system_error (-1);
 
 	return 0;
+}
+
+static int
+read_path_trace (const void *parent,
+		 const char *line,
+		 char *ptr,
+		 const char *path_prefix_filter,  /* May be null */
+		 const PathPrefixOption *path_prefix,
+		 PackFile ** files,
+		 size_t *    num_files,
+		 int         force_ssd_mode)
+{
+	char *end;
+
+	ptr = strchr (ptr, '"');
+	if (! ptr) {
+	return 0;
+	}
+
+	ptr++;
+
+	end = strrchr (ptr, '"');
+	if (! end) {
+	return 0;
+	}
+
+	*end = '\0';
+
+	fix_path (ptr);
+
+	if (path_prefix_filter &&
+		strncmp (ptr, path_prefix_filter,
+			strlen (path_prefix_filter))) {
+		nih_warn ("Skipping %s due to path prefix filter", ptr);
+	return 0;
+	}
+
+	if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
+		struct stat stbuf;
+		char *rewritten = nih_sprintf (
+			line, "%s%s", path_prefix->prefix, ptr);
+		if (! lstat (rewritten, &stbuf) &&
+			stbuf.st_dev == path_prefix->st_dev) {
+			/* If |rewritten| exists on the same device as
+				* path_prefix->st_dev, record the rewritten one
+				* instead of the original path.
+				*/
+			ptr = rewritten;
+		}
+	}
+
+	return trace_add_path (parent, ptr,
+			files, num_files, force_ssd_mode);
 }
 
 static void
