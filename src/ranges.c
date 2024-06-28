@@ -15,7 +15,10 @@
 #include <search.h>
 
 #include <nih/alloc.h>
+#include <nih/hash.h>
 #include <nih/logging.h>
+#include <sys/types.h>
+#include "nih/list.h"
 
 #include "ranges.h"
 
@@ -122,4 +125,73 @@ size_t sorted_range_array (const void *parent,
 	twalk (set->btree, collect_range_set_array);
 
 	return num_sorted_range_set_array;
+}
+
+struct file_range_sets_entry {
+	NihList entry;
+	struct devino {
+		dev_t dev;
+		ino_t ino;
+	} file;
+	RangeSet *set;
+};
+
+const struct devino *file_range_sets_key (NihList *entry)
+{
+	return &((struct file_range_sets_entry *) entry)->file;
+}
+
+uint32_t ino_hash (dev_t dev, ino_t ino)
+{
+	return (uint32_t) (dev ^ ino);
+}
+
+uint32_t file_range_sets_hash (const struct devino *key)
+{
+	return ino_hash (key->dev, key->ino);
+}
+
+int file_range_sets_cmp (const struct devino *key1, const struct devino *key2)
+{
+	if (key1->dev < key2->dev)
+		return -1;
+	else if (key1->dev > key2->dev)
+		return 1;
+	else if (key1->ino < key2->ino)
+		return -1;
+	else if (key1->ino > key2->ino)
+		return 1;
+	else
+		return 0;
+
+}
+
+FileRangeSets *file_range_sets_new (const void *parent)
+{
+	return NIH_MUST (nih_hash_new (parent, 2500,
+				       (NihKeyFunction)file_range_sets_key,
+				       (NihHashFunction)file_range_sets_hash,
+				       (NihCmpFunction)file_range_sets_cmp));
+
+}
+
+RangeSet *
+file_range_sets_lookup (FileRangeSets *sets, dev_t dev, ino_t ino)
+{
+	NihList *inode_hash = nih_hash_lookup (sets, &(struct devino){dev, ino});
+	if (! inode_hash)
+		return NULL;
+	return ((struct file_range_sets_entry *) inode_hash)->set;
+}
+
+void
+file_range_sets_add (FileRangeSets *sets, dev_t dev, ino_t ino, RangeSet *set)
+{
+	struct file_range_sets_entry *entry = NIH_MUST (nih_alloc (sets, sizeof (*entry)));
+	nih_list_init(&entry->entry);
+	entry->file.dev = dev;
+	entry->file.ino = ino;
+	entry->set = set;
+	nih_ref (set, entry);
+	NIH_MUST (nih_hash_add (sets, &entry->entry));
 }

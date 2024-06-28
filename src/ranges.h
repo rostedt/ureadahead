@@ -21,6 +21,7 @@
 
 #include <sys/types.h>
 
+#include <nih/hash.h>
 #include <nih/macros.h>
 
 
@@ -40,6 +41,9 @@ typedef struct range_set {
 	void *btree;
 } RangeSet;
 
+/* Hash from a file to a RangeSet. */
+typedef NihHash FileRangeSets;
+
 RangeSet *range_set_new (const void *parent);
 /* Add a range to the set. Overlapping or adjacent ranges will be merged. */
 void add_range (RangeSet *set, loff_t start, loff_t end);
@@ -50,6 +54,10 @@ size_t sorted_range_array (const void *parent, RangeSet *set, Range (**array)[])
 /* Range comparison function that is compatible with tsearch.
  * Compares ranges as half-open intervals. */
 int compare_range (const void *a, const void *b);
+
+FileRangeSets *file_range_sets_new (const void *parent);
+RangeSet *file_range_sets_lookup (FileRangeSets *sets, dev_t dev, ino_t ino);
+void file_range_sets_add (FileRangeSets *sets, dev_t dev, ino_t ino, RangeSet *set);
 
 
 NIH_END_EXTERN
