@@ -128,6 +128,13 @@ static int use_existing_trace_events = FALSE;
  */
 static int force_ssd_mode = FALSE;
 
+/**
+ * trace_file:
+ *
+ * Use an existing trace file instead of starting a new trace.
+ */
+static char* trace_file = NULL;
+
 static int
 path_prefix_option (NihOption  *option,
                     const char *arg)
@@ -233,6 +240,8 @@ static NihOption options[] = {
 	  NULL, NULL, &use_existing_trace_events, NULL },
 	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
 	  NULL, NULL, &force_ssd_mode, NULL },
+	{ 0, "trace-file", N_("use an existing trace file instead of tracing"),
+	  NULL, "TRACE_FILE", &trace_file, dup_string_handler },
 
 	NIH_OPTION_LAST
 };
@@ -322,7 +331,7 @@ main (int   argc,
 	}
 
 	/* Trace to generate new pack files */
-	if (trace (daemonise, timeout, filename, pack_file,
+	if (trace (daemonise, timeout, filename, pack_file, trace_file,
 		   path_prefix_filter, &path_prefix, use_existing_trace_events,
 		   force_ssd_mode) < 0) {
 		NihError *err;

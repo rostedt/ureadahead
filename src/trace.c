@@ -95,6 +95,13 @@
 
 
 /* Prototypes for static functions */
+static int       record_trace      (int daemonise,
+				    int timeout,
+				    const char *path_prefix_filter,
+				    const PathPrefixOption *path_prefix,
+				    int use_existing_trace_events,
+				    PackFile **files, size_t *num_files,
+				    int force_ssd_mode);
 static int       read_trace        (const void *parent,
 				    int dfd, const char *path,
 				    const char *path_prefix_filter,
@@ -134,9 +141,84 @@ trace (int daemonise,
        int timeout,
        const char *filename_to_replace,
        const char *pack_file,
+       const char *trace_file,
        const char *path_prefix_filter,
        const PathPrefixOption *path_prefix,
        int use_existing_trace_events,
+       int force_ssd_mode)
+{
+	int err;
+	nih_local PackFile *files = NULL;
+	size_t              num_files = 0;
+
+	if (trace_file)
+		err = read_trace (NULL, AT_FDCWD, trace_file, path_prefix_filter,
+                           path_prefix, &files, &num_files, force_ssd_mode);
+	else
+		err = record_trace (daemonise, timeout, path_prefix_filter, path_prefix,
+			use_existing_trace_events, &files, &num_files, force_ssd_mode);
+	if (err < 0)
+		return err;
+
+        /* Write out pack files */
+	for (size_t i = 0; i < num_files; i++) {
+		nih_local char *filename = NULL;
+		if (pack_file) {
+			filename = NIH_MUST (nih_strdup (NULL, pack_file));
+		} else {
+			filename = pack_file_name_for_device (NULL,
+							      files[i].dev);
+			if (! filename) {
+				NihError *err;
+
+				err = nih_error_get ();
+				nih_warn ("%s", err->message);
+				nih_free (err);
+
+				continue;
+			}
+
+			/* If filename_to_replace is not NULL, only write out
+			 * the file and skip others.
+			 */
+			if (filename_to_replace &&
+			    strcmp (filename_to_replace, filename)) {
+				nih_info ("Skipping %s", filename);
+				continue;
+			}
+		}
+		nih_info ("Writing %s", filename);
+
+		/* We only need to apply additional sorting to the
+		 * HDD-optimised packs, the SSD ones can read in random
+		 * order quite happily.
+		 *
+		 * Also for HDD, generate the inode group preloading
+		 * array.
+		 */
+		if (files[i].rotational) {
+			trace_add_groups (files, &files[i]);
+
+			trace_sort_blocks (files, &files[i]);
+			trace_sort_paths (files, &files[i]);
+		}
+
+		write_pack (filename, &files[i]);
+
+		if (nih_log_priority < NIH_LOG_MESSAGE)
+			pack_dump (&files[i], SORT_OPEN);
+	}
+
+	return 0;
+}
+
+int
+record_trace (int daemonise,
+       int timeout,
+       const char *path_prefix_filter,
+       const PathPrefixOption *path_prefix,
+       int use_existing_trace_events,
+	      PackFile **files, size_t *num_files,
        int force_ssd_mode)
 {
 	int                 dfd;
@@ -151,8 +233,6 @@ trace (int daemonise,
 	struct sigaction    old_sigterm;
 	struct sigaction    old_sigint;
 	struct timeval      tv;
-	nih_local PackFile *files = NULL;
-	size_t              num_files = 0;
 	size_t              num_cpus = 0;
 
 	dfd = open (PATH_TRACEFS, O_NOFOLLOW | O_RDONLY | O_NOATIME);
@@ -282,7 +362,7 @@ trace (int daemonise,
 
 	/* Read trace log */
 	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
-			&files, &num_files, force_ssd_mode) < 0)
+			files, num_files, force_ssd_mode) < 0)
 		goto error;
 
 	/*
@@ -303,55 +383,6 @@ trace (int daemonise,
 		goto error;
 	}
 
-	/* Write out pack files */
-	for (size_t i = 0; i < num_files; i++) {
-		nih_local char *filename = NULL;
-		if (pack_file) {
-			filename = NIH_MUST (nih_strdup (NULL, pack_file));
-		} else {
-			filename = pack_file_name_for_device (NULL,
-							      files[i].dev);
-			if (! filename) {
-				NihError *err;
-
-				err = nih_error_get ();
-				nih_warn ("%s", err->message);
-				nih_free (err);
-
-				continue;
-			}
-
-			/* If filename_to_replace is not NULL, only write out
-			 * the file and skip others.
-			 */
-			if (filename_to_replace &&
-			    strcmp (filename_to_replace, filename)) {
-				nih_info ("Skipping %s", filename);
-				continue;
-			}
-		}
-		nih_info ("Writing %s", filename);
-
-		/* We only need to apply additional sorting to the
-		 * HDD-optimised packs, the SSD ones can read in random
-		 * order quite happily.
-		 *
-		 * Also for HDD, generate the inode group preloading
-		 * array.
-		 */
-		if (files[i].rotational) {
-			trace_add_groups (files, &files[i]);
-
-			trace_sort_blocks (files, &files[i]);
-			trace_sort_paths (files, &files[i]);
-		}
-
-		write_pack (filename, &files[i]);
-
-		if (nih_log_priority < NIH_LOG_MESSAGE)
-			pack_dump (&files[i], SORT_OPEN);
-	}
-
 	return 0;
 error:
 	close (dfd);
@@ -360,7 +391,6 @@ error:
 
 	return -1;
 }
-
 
 static int
 read_trace (const void *parent,
