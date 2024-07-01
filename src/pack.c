@@ -850,6 +850,8 @@ do_readahead_ssd (PackFile *file,
 	for (int t = 0; t < NUM_THREADS; t++)
 		pthread_join (thread[t], NULL);
 
+	nih_free (ctx.got);
+
 	print_time ("Readahead", &start);
 
 	return 0;
