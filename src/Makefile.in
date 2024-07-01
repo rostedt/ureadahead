@@ -66,7 +66,7 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(sbindir)"
 PROGRAMS = $(sbin_PROGRAMS)
 am_ureadahead_OBJECTS = ureadahead.$(OBJEXT) trace.$(OBJEXT) \
-	pack.$(OBJEXT) values.$(OBJEXT) file.$(OBJEXT)
+	pack.$(OBJEXT) ranges.$(OBJEXT) values.$(OBJEXT) file.$(OBJEXT)
 ureadahead_OBJECTS = $(am_ureadahead_OBJECTS)
 am__DEPENDENCIES_1 =
 ureadahead_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
@@ -291,6 +291,7 @@ ureadahead_SOURCES = \
 	trace.c trace.h \
 	pack.c pack.h \
 	values.c values.h \
+	ranges.c ranges.h \
 	file.c file.h \
 	errors.h
 

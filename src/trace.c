@@ -62,6 +62,7 @@
 #include "pack.h"
 #include "values.h"
 #include "file.h"
+#include "ranges.h"
 
 
 /**
@@ -95,15 +96,46 @@
 
 
 /* Prototypes for static functions */
-static int       read_trace        (const void *parent,
-				    int dfd, const char *path,
-				    const char *path_prefix_filter,
-				    const PathPrefixOption *path_prefix,
-				    PackFile **files, size_t *num_files, int force_ssd_mode);
-static void      fix_path          (char *pathname);
-static int       trace_add_path    (const void *parent, const char *pathname,
-				    PackFile **files, size_t *num_files, int force_ssd_mode);
+static int       record_trace        (int daemonise,
+				      int timeout,
+				      const char *path_prefix_filter,
+				      const PathPrefixOption *path_prefix,
+				      int use_existing_trace_events,
+				      PackFile **files, size_t *num_files,
+				      int force_ssd_mode);
+static   int     read_trace          (const void *parent,
+				      int dfd, const char *path,
+				      const char *path_prefix_filter,
+				      const PathPrefixOption *path_prefix,
+				      PackFile **files, size_t *num_files,
+				      int force_ssd_mode);
+static   int     read_path_trace     (const void *parent,
+				      const char *line,
+				      char *ptr,
+				      const char *path_prefix_filter,
+				      const PathPrefixOption *path_prefix,
+				      PackFile **files, size_t *num_files,
+				      int force_ssd_mode);
+static int       read_filemap_trace  (const void *parent,
+				      FileRangeSets **filemaps,
+				      const char *line,
+				      char *ptr);
+static void      fix_path            (char *pathname);
+static int       trace_add_path      (const void *parent, const char *pathname,
+				      PackFile **files, size_t *num_files,
+				      int force_ssd_mode);
+static int       trace_add_filemap   (const void *parent,
+				      FileRangeSets **filemaps,
+				      unsigned int major,
+				      unsigned int minor,
+				      ino_t inode,
+				      loff_t ofs,
+				      loff_t max_ofs);
+static void      remove_untouched_blocks  (const void *parent,
+					   FileRangeSets *filemaps,
+					   PackFile *file);
 static int       ignore_path       (const char *pathname);
+char *           inode_hash_key    (const void *parent, dev_t dev, ino_t ino);
 static PackFile *trace_file        (const void *parent, dev_t dev,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
 static int       trace_add_chunks  (const void *parent,
@@ -128,9 +160,84 @@ trace (int daemonise,
        int timeout,
        const char *filename_to_replace,
        const char *pack_file,
+       const char *trace_file,
        const char *path_prefix_filter,
        const PathPrefixOption *path_prefix,
        int use_existing_trace_events,
+       int force_ssd_mode)
+{
+	int err;
+	nih_local PackFile *files = NULL;
+	size_t              num_files = 0;
+
+	if (trace_file)
+		err = read_trace (NULL, AT_FDCWD, trace_file, path_prefix_filter,
+                           path_prefix, &files, &num_files, force_ssd_mode);
+	else
+		err = record_trace (daemonise, timeout, path_prefix_filter, path_prefix,
+			use_existing_trace_events, &files, &num_files, force_ssd_mode);
+	if (err < 0)
+		return err;
+
+        /* Write out pack files */
+	for (size_t i = 0; i < num_files; i++) {
+		nih_local char *filename = NULL;
+		if (pack_file) {
+			filename = NIH_MUST (nih_strdup (NULL, pack_file));
+		} else {
+			filename = pack_file_name_for_device (NULL,
+							      files[i].dev);
+			if (! filename) {
+				NihError *err;
+
+				err = nih_error_get ();
+				nih_warn ("%s", err->message);
+				nih_free (err);
+
+				continue;
+			}
+
+			/* If filename_to_replace is not NULL, only write out
+			 * the file and skip others.
+			 */
+			if (filename_to_replace &&
+			    strcmp (filename_to_replace, filename)) {
+				nih_info ("Skipping %s", filename);
+				continue;
+			}
+		}
+		nih_info ("Writing %s", filename);
+
+		/* We only need to apply additional sorting to the
+		 * HDD-optimised packs, the SSD ones can read in random
+		 * order quite happily.
+		 *
+		 * Also for HDD, generate the inode group preloading
+		 * array.
+		 */
+		if (files[i].rotational) {
+			trace_add_groups (files, &files[i]);
+
+			trace_sort_blocks (files, &files[i]);
+			trace_sort_paths (files, &files[i]);
+		}
+
+		write_pack (filename, &files[i]);
+
+		if (nih_log_priority < NIH_LOG_MESSAGE)
+			pack_dump (&files[i], SORT_OPEN);
+	}
+
+	return 0;
+}
+
+int
+record_trace (int daemonise,
+       int timeout,
+       const char *path_prefix_filter,
+       const PathPrefixOption *path_prefix,
+       int use_existing_trace_events,
+	      PackFile **files, size_t *num_files,
        int force_ssd_mode)
 {
 	int                 dfd;
@@ -139,14 +246,15 @@ trace (int daemonise,
 	int                 old_sys_open_enabled = 0;
 	int                 old_open_exec_enabled = 0;
 	int                 old_uselib_enabled = 0;
+	int                 old_filemap_get_pages_enabled = 0;
+	int                 old_filemap_map_pages_enabled = 0;
+	int                 old_filemap_fault_enabled = 0;
 	int                 old_tracing_enabled = 0;
 	int                 old_buffer_size_kb = 0;
 	struct sigaction    act;
 	struct sigaction    old_sigterm;
 	struct sigaction    old_sigint;
 	struct timeval      tv;
-	nih_local PackFile *files = NULL;
-	size_t              num_files = 0;
 	size_t              num_cpus = 0;
 
 	dfd = open (PATH_TRACEFS, O_NOFOLLOW | O_RDONLY | O_NOATIME);
@@ -214,6 +322,36 @@ trace (int daemonise,
 
 			old_uselib_enabled = -1;
 		}
+		if (set_value (dfd, "events/filemap/mm_filemap_get_pages/enable",
+			       TRUE, &old_filemap_get_pages_enabled) < 0) {
+			NihError *err;
+
+			err = nih_error_get ();
+			nih_debug ("Missing filemap_get_pages tracing: %s", err->message);
+			nih_free (err);
+
+			old_filemap_get_pages_enabled = -1;
+		}
+		if (set_value (dfd, "events/filemap/mm_filemap_map_pages/enable",
+			       TRUE, &old_filemap_map_pages_enabled) < 0) {
+			NihError *err;
+
+			err = nih_error_get ();
+			nih_debug ("Missing filemap_map_pages tracing: %s", err->message);
+			nih_free (err);
+
+			old_filemap_map_pages_enabled = -1;
+		}
+		if (set_value (dfd, "events/filemap/mm_filemap_fault/enable",
+			       TRUE, &old_filemap_fault_enabled) < 0) {
+			NihError *err;
+
+			err = nih_error_get ();
+			nih_debug ("Missing filemap_fault tracing: %s", err->message);
+			nih_free (err);
+
+			old_filemap_fault_enabled = -1;
+		}
 	}
 	if (set_value (dfd, "buffer_size_kb", 8192/num_cpus, &old_buffer_size_kb) < 0)
 		goto error;
@@ -262,6 +400,18 @@ trace (int daemonise,
 			if (set_value (dfd, "events/fs/uselib/enable",
 				       old_uselib_enabled, NULL) < 0)
 				goto error;
+		if (old_filemap_get_pages_enabled >= 0)
+			if (set_value (dfd, "events/filemap/mm_filemap_get_pages/enable",
+					old_filemap_get_pages_enabled, NULL) < 0)
+				goto error;
+		if (old_filemap_map_pages_enabled >= 0)
+			if (set_value (dfd, "events/filemap/mm_filemap_map_pages/enable",
+					old_filemap_map_pages_enabled, NULL) < 0)
+				goto error;
+		if (old_filemap_fault_enabled >= 0)
+			if (set_value (dfd, "events/filemap/mm_filemap_fault/enable",
+					old_filemap_fault_enabled, NULL) < 0)
+				goto error;
 		if (set_value (dfd, "events/fs/open_exec/enable",
 			       old_open_exec_enabled, NULL) < 0)
 			goto error;
@@ -276,7 +426,7 @@ trace (int daemonise,
 
 	/* Read trace log */
 	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
-			&files, &num_files, force_ssd_mode) < 0)
+			files, num_files, force_ssd_mode) < 0)
 		goto error;
 
 	/*
@@ -297,55 +447,6 @@ trace (int daemonise,
 		goto error;
 	}
 
-	/* Write out pack files */
-	for (size_t i = 0; i < num_files; i++) {
-		nih_local char *filename = NULL;
-		if (pack_file) {
-			filename = NIH_MUST (nih_strdup (NULL, pack_file));
-		} else {
-			filename = pack_file_name_for_device (NULL,
-							      files[i].dev);
-			if (! filename) {
-				NihError *err;
-
-				err = nih_error_get ();
-				nih_warn ("%s", err->message);
-				nih_free (err);
-
-				continue;
-			}
-
-			/* If filename_to_replace is not NULL, only write out
-			 * the file and skip others.
-			 */
-			if (filename_to_replace &&
-			    strcmp (filename_to_replace, filename)) {
-				nih_info ("Skipping %s", filename);
-				continue;
-			}
-		}
-		nih_info ("Writing %s", filename);
-
-		/* We only need to apply additional sorting to the
-		 * HDD-optimised packs, the SSD ones can read in random
-		 * order quite happily.
-		 *
-		 * Also for HDD, generate the inode group preloading
-		 * array.
-		 */
-		if (files[i].rotational) {
-			trace_add_groups (files, &files[i]);
-
-			trace_sort_blocks (files, &files[i]);
-			trace_sort_paths (files, &files[i]);
-		}
-
-		write_pack (filename, &files[i]);
-
-		if (nih_log_priority < NIH_LOG_MESSAGE)
-			pack_dump (&files[i], SORT_OPEN);
-	}
-
 	return 0;
 error:
 	close (dfd);
@@ -354,7 +455,6 @@ error:
 
 	return -1;
 }
-
 
 static int
 read_trace (const void *parent,
@@ -369,6 +469,8 @@ read_trace (const void *parent,
 	int   fd;
 	FILE *fp;
 	char *line;
+	char has_filemap_trace = 0;
+	nih_local FileRangeSets *filemaps = NULL;
 
 	nih_assert (path != NULL);
 	nih_assert (path_prefix != NULL);
@@ -390,63 +492,228 @@ read_trace (const void *parent,
 		char *ptr;
 		char *end;
 
+		ptr = strstr (line, " mm_filemap_fault:");
+		if (! ptr)
+			ptr = strstr (line, " mm_filemap_get_pages:");
+		if (! ptr)
+			ptr = strstr (line, " mm_filemap_map_pages:");
+		if (ptr) {
+			has_filemap_trace = 1;
+			read_filemap_trace (parent, &filemaps, line, ptr);
+		}
+
 		ptr = strstr (line, " do_sys_open:");
 		if (! ptr)
 			ptr = strstr (line, " open_exec:");
 		if (! ptr)
 			ptr = strstr (line, " uselib:");
-		if (! ptr) {
-			nih_free (line);
-			continue;
+		if (ptr) {
+			read_path_trace (parent, line, ptr,
+				path_prefix_filter, path_prefix,
+				files, num_files, force_ssd_mode);
 		}
-
-		ptr = strchr (ptr, '"');
-		if (! ptr) {
-			nih_free (line);
-			continue;
-		}
-
-		ptr++;
-
-		end = strrchr (ptr, '"');
-		if (! end) {
-			nih_free (line);
-			continue;
-		}
-
-		*end = '\0';
-
-		fix_path (ptr);
-
-		if (path_prefix_filter &&
-		    strncmp (ptr, path_prefix_filter,
-			     strlen (path_prefix_filter))) {
-			nih_warn ("Skipping %s due to path prefix filter", ptr);
-			continue;
-		}
-
-		if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
-			struct stat stbuf;
-			char *rewritten = nih_sprintf (
-			    line, "%s%s", path_prefix->prefix, ptr);
-			if (! lstat (rewritten, &stbuf) &&
-			    stbuf.st_dev == path_prefix->st_dev) {
-				/* If |rewritten| exists on the same device as
-				 * path_prefix->st_dev, record the rewritten one
-				 * instead of the original path.
-				 */
-				ptr = rewritten;
-			}
-		}
-		trace_add_path (parent, ptr, files, num_files, force_ssd_mode);
 
 		nih_free (line);  /* also frees |rewritten| */
+	}
+
+	if (has_filemap_trace) {
+		for (int i = 0; i < *num_files; i++) {
+			remove_untouched_blocks (*files, filemaps, &(*files)[i]);
+		}
 	}
 
 	if (fclose (fp) < 0)
 		nih_return_system_error (-1);
 
 	return 0;
+}
+
+static int
+read_path_trace (const void *parent,
+		 const char *line,
+		 char *ptr,
+		 const char *path_prefix_filter,  /* May be null */
+		 const PathPrefixOption *path_prefix,
+		 PackFile ** files,
+		 size_t *    num_files,
+		 int         force_ssd_mode)
+{
+	char *end;
+
+	ptr = strchr (ptr, '"');
+	if (! ptr) {
+	return 0;
+	}
+
+	ptr++;
+
+	end = strrchr (ptr, '"');
+	if (! end) {
+	return 0;
+	}
+
+	*end = '\0';
+
+	fix_path (ptr);
+
+	if (path_prefix_filter &&
+		strncmp (ptr, path_prefix_filter,
+			strlen (path_prefix_filter))) {
+		nih_warn ("Skipping %s due to path prefix filter", ptr);
+	return 0;
+	}
+
+	if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
+		struct stat stbuf;
+		char *rewritten = nih_sprintf (
+			line, "%s%s", path_prefix->prefix, ptr);
+		if (! lstat (rewritten, &stbuf) &&
+			stbuf.st_dev == path_prefix->st_dev) {
+			/* If |rewritten| exists on the same device as
+				* path_prefix->st_dev, record the rewritten one
+				* instead of the original path.
+				*/
+			ptr = rewritten;
+		}
+	}
+
+	return trace_add_path (parent, ptr,
+			files, num_files, force_ssd_mode);
+}
+
+static void
+remove_untouched_blocks  (const void *parent,
+			  FileRangeSets *filemaps,
+			  PackFile *file)
+{
+	PackBlock *reduced_blocks = NULL;
+	size_t num_blocks = 0;
+	PackPath *reduced_paths = NULL;
+	size_t num_paths = 0;
+
+	nih_local Range (*sorted_file_maps)[] = NULL;
+	size_t num_sorted_file_maps = 0;
+	size_t filemapidx = 0;
+	size_t pathidx = -1;
+
+	/* Iterate both blocks and filemaps in order to get the intersection of them
+	 * to drop file ranges that no process read */
+	for (int blockidx = 0; blockidx < file->num_blocks; blockidx++) {
+		PackBlock *block = &file->blocks[blockidx];
+		struct range block_range = {
+			block->offset,
+			 block->offset + block->length};
+
+		/* Prepare the sorted filemap ranges for the next file */
+		if (block->pathidx != pathidx) {
+			const char *inode_key;
+			RangeSet *filemap;
+
+			pathidx = block->pathidx;
+			filemapidx = 0;
+
+			filemap = file_range_sets_lookup (filemaps, file->dev, file->paths[pathidx].ino);
+			if (! filemap) {
+				/* This path has no filemap, which means nobody accessed */
+				num_sorted_file_maps = 0;
+				continue;
+			}
+
+			num_sorted_file_maps = sorted_range_array (NULL, filemap, &sorted_file_maps);
+		}
+
+		/* skip filemaps until we find an overlap with the blocks */
+		while (filemapidx < num_sorted_file_maps &&
+			compare_range (&(*sorted_file_maps)[filemapidx], &block_range) < 0)
+				filemapidx++;
+
+		/* Add blocks while they overlap with the accessed ranges */
+		for (;;) {
+			loff_t new_offset, new_end, new_length, new_physical;
+
+			if (filemapidx >= num_sorted_file_maps)
+				break;
+
+			struct range *range = &(*sorted_file_maps)[filemapidx];
+
+			if (compare_range (range, &block_range) > 0)
+				break;
+
+			new_offset = nih_max (range->start, block->offset);
+			new_end = nih_min (range->end, block->offset + block->length);
+			new_length = new_end - new_offset;
+			new_physical = block->physical + new_offset - block->offset;
+
+			if (num_paths == 0 || reduced_paths[num_paths - 1].ino !=
+				file->paths[pathidx].ino)
+			{
+				reduced_paths = NIH_MUST (nih_realloc (reduced_paths,
+					parent, sizeof(PackPath) * (++num_paths)));
+				reduced_paths[num_paths - 1] = file->paths[pathidx];
+			}
+
+			reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
+				parent, sizeof(PackBlock) * (++num_blocks)));
+			reduced_blocks[num_blocks - 1].pathidx = num_paths - 1;
+			reduced_blocks[num_blocks - 1].offset = new_offset;
+			reduced_blocks[num_blocks - 1].length = new_length;
+			reduced_blocks[num_blocks - 1].physical = new_physical;
+
+			/* Next block still can overlap with this range. Next blockidx loop. */
+			if (range->end > block_range.end)
+				break;
+			/* Otherwise, see if the next filemap is still in this block. */
+			filemapidx++;
+		}
+
+	}
+
+	nih_free (file->blocks);
+	file->blocks = reduced_blocks;
+	file->num_blocks = num_blocks;
+	nih_free (file->paths);
+	file->paths = reduced_paths;
+	file->num_paths = num_paths;
+}
+
+static int
+read_filemap_trace (const void *parent, FileRangeSets **filemaps,
+		    const char *line, char *ptr)
+{
+	unsigned int major, minor;
+	ino_t inode;
+	loff_t ofs, max_ofs;
+
+	ptr = strstr (ptr, "dev=");
+	if (! ptr)
+		return 0;
+
+	if (sscanf (ptr, "dev=%u:%u", &major, &minor) != 2)
+		return 0;
+
+	ptr = strstr (ptr, "ino=");
+	if (! ptr)
+		return 0;
+
+	if (sscanf (ptr, "ino=%lx", &inode) != 1)
+		return 0;
+
+	ptr = strstr (ptr, "ofs=");
+	if (! ptr)
+		return 0;
+
+	if (sscanf (ptr, "ofs=%lu", &ofs) != 1)
+		return 0;
+
+	ptr = strstr (ptr, "max_ofs=");
+	if (! ptr)
+		/* filemap_fault does not have this field, which is fine */
+		max_ofs = ofs;
+	else if (sscanf (ptr, "max_ofs=%lu", &max_ofs) != 1)
+		return 0;
+
+	return trace_add_filemap (parent, filemaps,
+			major, minor, inode, ofs, max_ofs);
 }
 
 static void
@@ -654,6 +921,31 @@ trace_add_path (const void *parent,
 	 */
 	trace_add_chunks (*files, file, path, fd, statbuf.st_size);
 	close (fd);
+
+	return 0;
+}
+
+static int
+trace_add_filemap (const void *parent,
+		   FileRangeSets **filemaps,
+		   unsigned int major,
+		   unsigned int minor,
+		   ino_t inode,
+		   loff_t ofs,
+		   loff_t max_ofs)
+{
+	RangeSet *filemap;
+
+	if (! *filemaps)
+		*filemaps = file_range_sets_new (parent);
+
+	filemap = file_range_sets_lookup (*filemaps, makedev (major, minor), inode);
+	if (! filemap) {
+		filemap = range_set_new (*filemaps);
+		file_range_sets_add (*filemaps, makedev (major, minor), inode, filemap);
+	}
+
+	add_range (filemap, ofs, max_ofs + 4096); /* +4096 since max_ofs is a last page */
 
 	return 0;
 }
