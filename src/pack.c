@@ -171,6 +171,7 @@ pack_file_name_for_device (const void *parent,
 		unsigned int min;
 		char *       mount;
 		struct stat  statbuf;
+		char *       result;
 
 		/* mount ID */
 		ptr = strtok_r (line, " \t\n", &saveptr);
@@ -214,10 +215,14 @@ pack_file_name_for_device (const void *parent,
 		}
 
 		/* Done, convert the mountpoint to a pack filename */
-		if (fclose (fp) < 0)
+		if (fclose (fp) < 0) {
+			nih_free (line);
 			nih_return_system_error (NULL);
+		}
 
-		return pack_file_name_for_mount (parent, mount);
+		result = pack_file_name_for_mount (parent, mount);
+		nih_free (line);
+		return result;
 	}
 
 	if (fclose (fp) < 0)
@@ -844,6 +849,8 @@ do_readahead_ssd (PackFile *file,
 		pthread_create (&thread[t], NULL, ra_thread, &ctx);
 	for (int t = 0; t < NUM_THREADS; t++)
 		pthread_join (thread[t], NULL);
+
+	nih_free (ctx.got);
 
 	print_time ("Readahead", &start);
 
