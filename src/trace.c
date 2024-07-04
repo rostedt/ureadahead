@@ -57,6 +57,7 @@
 #include <nih/main.h>
 #include <nih/logging.h>
 #include <nih/error.h>
+#include <tracefs.h>
 
 #include "trace.h"
 #include "pack.h"
@@ -93,6 +94,22 @@
  **/
 #define INODE_GROUP_PRELOAD_THRESHOLD 8
 
+
+/**
+ * EVENTS:
+ *
+ * TraceFS events to enable.
+ *
+ **/
+static const char *EVENTS[][2] = {
+	/* required events for trace to work */
+	{"fs", "do_sys_open"},
+	{"fs", "open_exec"},
+	/* optional events follow */
+	{"fs", "uselib"}};
+
+#define NR_REQUIRED_EVENTS 2
+#define NR_EVENTS (sizeof (EVENTS) / sizeof (EVENTS[0]))
 
 /* Prototypes for static functions */
 static int       read_trace        (const void *parent,
@@ -136,9 +153,7 @@ trace (int daemonise,
 	int                 dfd;
 	FILE                *fp;
 	int                 unmount = FALSE;
-	int                 old_sys_open_enabled = 0;
-	int                 old_open_exec_enabled = 0;
-	int                 old_uselib_enabled = 0;
+	int                 old_events_enabled[NR_EVENTS] = {};
 	int                 old_tracing_enabled = 0;
 	int                 old_buffer_size_kb = 0;
 	struct sigaction    act;
@@ -147,7 +162,6 @@ trace (int daemonise,
 	struct timeval      tv;
 	nih_local PackFile *files = NULL;
 	size_t              num_files = 0;
-	size_t              num_cpus = 0;
 
 	dfd = open (PATH_TRACEFS, O_NOFOLLOW | O_RDONLY | O_NOATIME);
 	if (dfd < 0) {
@@ -174,52 +188,43 @@ trace (int daemonise,
 		unmount = TRUE;
 	}
 
-	/*
-	 * Count the number of CPUs, default to 1 on error. 
-	 */
-	fp = fopen("/proc/cpuinfo", "r");
-	if (fp) {
-		int line_size=1024;
-		char *processor="processor";
-		char *line = malloc(line_size);
-		if (line) {
-			num_cpus = 0;
-			while (fgets(line,line_size,fp) != NULL) {
-				if (!strncmp(line,processor,strlen(processor)))
-					num_cpus++;
-			}
-			free(line);
-			nih_message("Counted %zu CPUs\n",num_cpus);
-		}
-		fclose(fp);
-	}
-	if (!num_cpus)
-		num_cpus = 1;
-
 	if (! use_existing_trace_events) {
-		/* Enable tracing of open() syscalls */
-		if (set_value (dfd, "events/fs/do_sys_open/enable",
-			       TRUE, &old_sys_open_enabled) < 0)
-			goto error;
- 		if (set_value (dfd, "events/fs/open_exec/enable",
-			       TRUE, &old_open_exec_enabled) < 0)
-			goto error;
- 		if (set_value (dfd, "events/fs/uselib/enable",
-			       TRUE, &old_uselib_enabled) < 0) {
-			NihError *err;
-
-			err = nih_error_get ();
-			nih_debug ("Missing uselib tracing: %s", err->message);
-			nih_free (err);
-
-			old_uselib_enabled = -1;
+		for (int i = 0; i < NR_EVENTS; i++) {
+			int ret;
+			enum tracefs_enable_state old_state = tracefs_event_is_enabled (NULL, EVENTS[i][0], EVENTS[i][1]);
+			old_events_enabled[i] = (old_state == TRACEFS_ALL_ENABLED || old_state == TRACEFS_SOME_ENABLED);
+			ret = tracefs_event_enable (NULL, EVENTS[i][0], EVENTS[i][1]);
+			if (ret < 0) {
+				if (i < NR_REQUIRED_EVENTS) {
+					nih_error ("Failed to enable %s", EVENTS[i][1]);
+					nih_error_raise_system ();
+					goto error;
+				}
+				nih_debug ("Missing %s tracing: %d", EVENTS[i][1], ret);
+			}
 		}
 	}
-	if (set_value (dfd, "buffer_size_kb", 8192/num_cpus, &old_buffer_size_kb) < 0)
+	/* cpu 0 to get the size per core, assuming all cpus have the same size */
+	if ((old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
+		nih_error ("Failed to get the buffer size");
+		nih_error_raise_system ();
 		goto error;
-	if (set_value (dfd, "tracing_on",
-		       TRUE, &old_tracing_enabled) < 0)
+	}
+	if (tracefs_instance_set_buffer_size (NULL, 8192, -1) < 0) {
+		nih_error ("Failed to set the buffer size");
+		nih_error_raise_system ();
 		goto error;
+	}
+	if ((old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
+		nih_error ("Failed to get if the trace is on");
+		nih_error_raise_system ();
+		goto error;
+	}
+	if (tracefs_trace_on (NULL) < 0) {
+		nih_error ("Failed to set the trace on");
+		nih_error_raise_system ();
+		goto error;
+	}
 
 	if (daemonise) {
 		pid_t pid;
@@ -254,20 +259,17 @@ trace (int daemonise,
 	sigaction (SIGINT, &old_sigint, NULL);
 
 	/* Restore previous tracing settings */
-	if (set_value (dfd, "tracing_on",
-		       old_tracing_enabled, NULL) < 0)
+	if (old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
+		nih_error_raise_system ();
 		goto error;
+	}
 	if (! use_existing_trace_events) {
-		if (old_uselib_enabled >= 0)
-			if (set_value (dfd, "events/fs/uselib/enable",
-				       old_uselib_enabled, NULL) < 0)
-				goto error;
-		if (set_value (dfd, "events/fs/open_exec/enable",
-			       old_open_exec_enabled, NULL) < 0)
-			goto error;
-		if (set_value (dfd, "events/fs/do_sys_open/enable",
-			       old_sys_open_enabled, NULL) < 0)
-			goto error;
+		for (int i = 0; i < NR_EVENTS; i++) {
+			if (old_events_enabled[i] > 0)
+				continue;
+			tracefs_event_disable (NULL,
+					       EVENTS[i][0], EVENTS[i][1]);
+		}
 	}
 
 	/* Be nicer */
@@ -283,8 +285,11 @@ trace (int daemonise,
 	 * Restore the trace buffer size (which has just been read) and free
 	 * a bunch of memory.
 	 */
-	if (set_value (dfd, "buffer_size_kb", old_buffer_size_kb, NULL) < 0)
+	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
+		nih_error ("Failed to restore the buffer size");
+		nih_error_raise_system ();
 		goto error;
+	}
 
 	/* Unmount the temporary debugfs mount if we mounted it */
 	if (close (dfd)) {

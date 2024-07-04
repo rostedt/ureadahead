@@ -124,6 +124,7 @@ am_ureadahead_OBJECTS = ureadahead.$(OBJEXT) trace.$(OBJEXT) \
 ureadahead_OBJECTS = $(am_ureadahead_OBJECTS)
 am__DEPENDENCIES_1 =
 ureadahead_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
 	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -311,6 +312,10 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+TRACEEVENT_CFLAGS = @TRACEEVENT_CFLAGS@
+TRACEEVENT_LIBS = @TRACEEVENT_LIBS@
+TRACEFS_CFLAGS = @TRACEFS_CFLAGS@
+TRACEFS_LIBS = @TRACEFS_LIBS@
 USE_INCLUDED_LIBINTL = @USE_INCLUDED_LIBINTL@
 USE_NLS = @USE_NLS@
 VERSION = @VERSION@
@@ -376,7 +381,9 @@ top_srcdir = @top_srcdir@
 AM_CFLAGS = \
 	$(NIH_CFLAGS) \
 	$(BLKID_CFLAGS) \
-	$(EXT2FS_CFLAGS)
+	$(EXT2FS_CFLAGS) \
+	$(TRACEFS_CFLAGS) \
+	$(TRACEEVENT_CFLAGS)
 
 AM_CPPFLAGS = \
 	-DLOCALEDIR="\"$(localedir)\"" \
@@ -396,7 +403,9 @@ ureadahead_LDADD = \
 	$(NIH_LIBS) \
 	$(BLKID_LIBS) \
 	$(EXT2FS_LIBS) \
-	$(LTLIBINTL)
+	$(LTLIBINTL) \
+	$(TRACEEVENT_LIBS) \
+	$(TRACEFS_LIBS)
 
 ureadahead_LDFLAGS = \
 	-pthread

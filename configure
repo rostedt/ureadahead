@@ -667,6 +667,10 @@ ac_subst_vars='am__EXEEXT_FALSE
 am__EXEEXT_TRUE
 LTLIBOBJS
 LIBOBJS
+TRACEEVENT_LIBS
+TRACEEVENT_CFLAGS
+TRACEFS_LIBS
+TRACEFS_CFLAGS
 EXT2FS_LIBS
 EXT2FS_CFLAGS
 BLKID_LIBS
@@ -890,7 +894,11 @@ NIH_LIBS
 BLKID_CFLAGS
 BLKID_LIBS
 EXT2FS_CFLAGS
-EXT2FS_LIBS'
+EXT2FS_LIBS
+TRACEFS_CFLAGS
+TRACEFS_LIBS
+TRACEEVENT_CFLAGS
+TRACEEVENT_LIBS'
 
 
 # Initialize some variables set by options.
@@ -1591,6 +1599,14 @@ Some influential environment variables:
   EXT2FS_CFLAGS
               C compiler flags for EXT2FS, overriding pkg-config
   EXT2FS_LIBS linker flags for EXT2FS, overriding pkg-config
+  TRACEFS_CFLAGS
+              C compiler flags for TRACEFS, overriding pkg-config
+  TRACEFS_LIBS
+              linker flags for TRACEFS, overriding pkg-config
+  TRACEEVENT_CFLAGS
+              C compiler flags for TRACEEVENT, overriding pkg-config
+  TRACEEVENT_LIBS
+              linker flags for TRACEEVENT, overriding pkg-config
 
 Use these variables to override the choices made by `configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -19701,6 +19717,188 @@ See \`config.log' for more details" "$LINENO" 5; }
 else
         EXT2FS_CFLAGS=$pkg_cv_EXT2FS_CFLAGS
         EXT2FS_LIBS=$pkg_cv_EXT2FS_LIBS
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+
+fi
+
+pkg_failed=no
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libtracefs >= 1.6" >&5
+printf %s "checking for libtracefs >= 1.6... " >&6; }
+
+if test -n "$TRACEFS_CFLAGS"; then
+    pkg_cv_TRACEFS_CFLAGS="$TRACEFS_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtracefs >= 1.6\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libtracefs >= 1.6") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_TRACEFS_CFLAGS=`$PKG_CONFIG --cflags "libtracefs >= 1.6" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$TRACEFS_LIBS"; then
+    pkg_cv_TRACEFS_LIBS="$TRACEFS_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtracefs >= 1.6\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libtracefs >= 1.6") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_TRACEFS_LIBS=`$PKG_CONFIG --libs "libtracefs >= 1.6" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+                TRACEFS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libtracefs >= 1.6" 2>&1`
+        else
+                TRACEFS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libtracefs >= 1.6" 2>&1`
+        fi
+        # Put the nasty error message in config.log where it belongs
+        echo "$TRACEFS_PKG_ERRORS" >&5
+
+        as_fn_error $? "Package requirements (libtracefs >= 1.6) were not met:
+
+$TRACEFS_PKG_ERRORS
+
+Consider adjusting the PKG_CONFIG_PATH environment variable if you
+installed software in a non-standard prefix.
+
+Alternatively, you may set the environment variables TRACEFS_CFLAGS
+and TRACEFS_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details." "$LINENO" 5
+elif test $pkg_failed = untried; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+        { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+printf "%s\n" "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
+is in your PATH or set the PKG_CONFIG environment variable to the full
+path to pkg-config.
+
+Alternatively, you may set the environment variables TRACEFS_CFLAGS
+and TRACEFS_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+To get pkg-config, see <http://pkg-config.freedesktop.org/>.
+See \`config.log' for more details" "$LINENO" 5; }
+else
+        TRACEFS_CFLAGS=$pkg_cv_TRACEFS_CFLAGS
+        TRACEFS_LIBS=$pkg_cv_TRACEFS_LIBS
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+
+fi
+
+pkg_failed=no
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libtraceevent >= 1.7" >&5
+printf %s "checking for libtraceevent >= 1.7... " >&6; }
+
+if test -n "$TRACEEVENT_CFLAGS"; then
+    pkg_cv_TRACEEVENT_CFLAGS="$TRACEEVENT_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtraceevent >= 1.7\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libtraceevent >= 1.7") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_TRACEEVENT_CFLAGS=`$PKG_CONFIG --cflags "libtraceevent >= 1.7" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$TRACEEVENT_LIBS"; then
+    pkg_cv_TRACEEVENT_LIBS="$TRACEEVENT_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libtraceevent >= 1.7\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libtraceevent >= 1.7") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_TRACEEVENT_LIBS=`$PKG_CONFIG --libs "libtraceevent >= 1.7" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+                TRACEEVENT_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libtraceevent >= 1.7" 2>&1`
+        else
+                TRACEEVENT_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libtraceevent >= 1.7" 2>&1`
+        fi
+        # Put the nasty error message in config.log where it belongs
+        echo "$TRACEEVENT_PKG_ERRORS" >&5
+
+        as_fn_error $? "Package requirements (libtraceevent >= 1.7) were not met:
+
+$TRACEEVENT_PKG_ERRORS
+
+Consider adjusting the PKG_CONFIG_PATH environment variable if you
+installed software in a non-standard prefix.
+
+Alternatively, you may set the environment variables TRACEEVENT_CFLAGS
+and TRACEEVENT_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details." "$LINENO" 5
+elif test $pkg_failed = untried; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+        { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+printf "%s\n" "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
+is in your PATH or set the PKG_CONFIG environment variable to the full
+path to pkg-config.
+
+Alternatively, you may set the environment variables TRACEEVENT_CFLAGS
+and TRACEEVENT_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+To get pkg-config, see <http://pkg-config.freedesktop.org/>.
+See \`config.log' for more details" "$LINENO" 5; }
+else
+        TRACEEVENT_CFLAGS=$pkg_cv_TRACEEVENT_CFLAGS
+        TRACEEVENT_LIBS=$pkg_cv_TRACEEVENT_LIBS
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }
 
