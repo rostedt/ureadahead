@@ -66,28 +66,6 @@
 
 
 /**
- * PATH_DEBUGFS:
- *
- * Path to the usual debugfs mountpoint.
- **/
-#define PATH_DEBUGFS     "/sys/kernel/debug"
-
-/**
- * PATH_DEBUGFS_TMP:
- *
- * Path to the temporary debugfs mountpoint that we mount it on if it
- * hasn't been mounted at the usual place yet.
- **/
-#define PATH_DEBUGFS_TMP "/var/lib/ureadahead/debugfs"
-
-/**
- * PATH_TRACEFS:
- *
- * Path to the usual tracefs (since kernel 4.1) mountpoint.
- **/
-#define PATH_TRACEFS     "/sys/kernel/tracing"
-
-/**
  * INODE_GROUP_PRELOAD_THRESHOLD:
  *
  * Number of inodes in a group before we preload that inode's blocks.
@@ -113,7 +91,7 @@ static const char *EVENTS[][2] = {
 
 /* Prototypes for static functions */
 static int       read_trace        (const void *parent,
-				    int dfd, const char *path,
+				    const char *path,
 				    const char *path_prefix_filter,
 				    const PathPrefixOption *path_prefix,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
@@ -150,9 +128,8 @@ trace (int daemonise,
        int use_existing_trace_events,
        int force_ssd_mode)
 {
-	int                 dfd;
+	char                *trace_path;
 	FILE                *fp;
-	int                 unmount = FALSE;
 	int                 old_events_enabled[NR_EVENTS] = {};
 	int                 old_tracing_enabled = 0;
 	int                 old_buffer_size_kb = 0;
@@ -163,29 +140,11 @@ trace (int daemonise,
 	nih_local PackFile *files = NULL;
 	size_t              num_files = 0;
 
-	dfd = open (PATH_TRACEFS, O_NOFOLLOW | O_RDONLY | O_NOATIME);
-	if (dfd < 0) {
-		if (errno != ENOENT)
-			nih_return_system_error (-1);
-
-		/* Mount debugfs (and implicitly tracefs) if not already mounted */
-		dfd = open (PATH_DEBUGFS "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
-	}
-	if (dfd < 0) {
-		if (errno != ENOENT)
-			nih_return_system_error (-1);
-
-		if (mount ("none", PATH_DEBUGFS_TMP, "debugfs", 0, NULL) < 0)
-			nih_return_system_error (-1);
-
-		dfd = open (PATH_DEBUGFS_TMP "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
-		if (dfd < 0) {
-			nih_error_raise_system ();
-			umount (PATH_DEBUGFS_TMP);
-			return -1;
-		}
-
-		unmount = TRUE;
+	trace_path = tracefs_instance_get_file (NULL, "trace");
+	if (! trace_path) {
+		nih_error ("Failed to get the path to trace file. Is tracefs mounted?");
+		nih_error_raise_system ();
+		goto error;
 	}
 
 	if (! use_existing_trace_events) {
@@ -277,7 +236,7 @@ trace (int daemonise,
 		;
 
 	/* Read trace log */
-	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
+	if (read_trace (NULL, trace_path, path_prefix_filter, path_prefix,
 			&files, &num_files, force_ssd_mode) < 0)
 		goto error;
 
@@ -287,17 +246,6 @@ trace (int daemonise,
 	 */
 	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
 		nih_error ("Failed to restore the buffer size");
-		nih_error_raise_system ();
-		goto error;
-	}
-
-	/* Unmount the temporary debugfs mount if we mounted it */
-	if (close (dfd)) {
-		nih_error_raise_system ();
-		goto error;
-	}
-	if (unmount
-	    && (umount (PATH_DEBUGFS_TMP) < 0)) {
 		nih_error_raise_system ();
 		goto error;
 	}
@@ -351,11 +299,12 @@ trace (int daemonise,
 			pack_dump (&files[i], SORT_OPEN);
 	}
 
+	tracefs_put_tracing_file (trace_path);
+
 	return 0;
 error:
-	close (dfd);
-	if (unmount)
-		umount (PATH_DEBUGFS_TMP);
+	if (! trace_path)
+		tracefs_put_tracing_file (trace_path);
 
 	return -1;
 }
@@ -363,7 +312,6 @@ error:
 
 static int
 read_trace (const void *parent,
-	    int         dfd,
 	    const char *path,
 	    const char *path_prefix_filter,  /* May be null */
 	    const PathPrefixOption *path_prefix,
@@ -380,7 +328,7 @@ read_trace (const void *parent,
 	nih_assert (files != NULL);
 	nih_assert (num_files != NULL);
 
-	fd = openat (dfd, path, O_RDONLY);
+	fd = open (path, O_RDONLY);
 	if (fd < 0)
 		nih_return_system_error (-1);
 
