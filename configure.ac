@@ -27,6 +27,8 @@ PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([NIH], [libnih >= 1.0.0])
 PKG_CHECK_MODULES([BLKID], [blkid >= 2.16])
 PKG_CHECK_MODULES([EXT2FS], [ext2fs >= 1.41])
+PKG_CHECK_MODULES([TRACEFS], [libtracefs >= 1.6])
+PKG_CHECK_MODULES([TRACEEVENT], [libtraceevent >= 1.7])
 
 # Checks for header files.
 

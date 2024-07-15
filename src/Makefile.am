@@ -3,7 +3,9 @@
 AM_CFLAGS = \
 	$(NIH_CFLAGS) \
 	$(BLKID_CFLAGS) \
-	$(EXT2FS_CFLAGS)
+	$(EXT2FS_CFLAGS) \
+	$(TRACEFS_CFLAGS) \
+	$(TRACEEVENT_CFLAGS)
 
 AM_CPPFLAGS = \
 	-DLOCALEDIR="\"$(localedir)\"" \
@@ -26,7 +28,9 @@ ureadahead_LDADD = \
 	$(NIH_LIBS) \
 	$(BLKID_LIBS) \
 	$(EXT2FS_LIBS) \
-	$(LTLIBINTL)
+	$(LTLIBINTL) \
+	$(TRACEEVENT_LIBS) \
+	$(TRACEFS_LIBS)
 ureadahead_LDFLAGS = \
 	-pthread
 
