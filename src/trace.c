@@ -103,6 +103,13 @@ static int       read_trace        (const void *parent,
 				    int force_ssd_mode);
 static int       read_trace_cb     (struct tep_event *event, struct tep_record *record,
 				    int cpu, void *read_trace_context);
+static int       read_path_trace   (struct tep_event *event, struct tep_record *record,
+				    const void *parent,
+				    const char *path_prefix_filter,
+				    const PathPrefixOption *path_prefix,
+				    PackFile **files, size_t *num_files,
+				    int force_ssd_mode);
+				    int cpu, void *read_trace_context);
 static void      fix_path          (char *pathname);
 static int       trace_add_path    (const void *parent, const char *pathname,
 				    PackFile **files, size_t *num_files, int force_ssd_mode);
@@ -360,13 +367,29 @@ read_trace_cb  (struct tep_event *event,
 	        int cpu, void *read_trace_context)
 {
 	struct read_trace_context *context = read_trace_context;
+
+	if ((event->id == context->do_sys_open->id) ||
+	    (event->id == context->open_exec->id) ||
+	    (context->uselib && event->id == context->uselib->id))
+		return read_path_trace (event, record, context->parent,
+				        context->path_prefix_filter,
+					context->path_prefix,
+				        context->files, context->num_files,
+				        context->force_ssd_mode);
+
+	return 0;
+}
+
+static int
+read_path_trace  (struct tep_event *event, struct tep_record *record,
+	          const void *parent,
+	          const char *path_prefix_filter,
+	          const PathPrefixOption *path_prefix,
+	          PackFile **files, size_t *num_files,
+	          int force_ssd_mode)
+{
 	char                      *path, *tep_path = NULL;
 	int                        len;
-
-	if ((!context->do_sys_open || event->id != context->do_sys_open->id) &&
-	    (!context->open_exec || event->id != context->open_exec->id) &&
-	    (!context->uselib || event->id != context->uselib->id))
-		return 0;
 
 	tep_path = tep_get_field_raw(NULL, event, "filename", record, &len, 0);
 	if (! tep_path) {
@@ -380,20 +403,20 @@ read_trace_cb  (struct tep_event *event,
 
 	fix_path (path);
 
-	if (context->path_prefix_filter &&
-		strncmp (path, context->path_prefix_filter,
-				strlen (context->path_prefix_filter))) {
+	if (path_prefix_filter &&
+		strncmp (path, path_prefix_filter,
+				strlen (path_prefix_filter))) {
 		nih_warn ("Skipping %s due to path prefix filter", path);
 		goto out;
 	}
 
-	if (context->path_prefix->st_dev != NODEV && path[0] == '/') {
+	if (path_prefix->st_dev != NODEV && path[0] == '/') {
 		struct stat stbuf;
 		char *rewritten;
 		asprintf (&rewritten,
-			  "%s%s", context->path_prefix->prefix, path);
+			  "%s%s", path_prefix->prefix, path);
 		if (! lstat (rewritten, &stbuf) &&
-			stbuf.st_dev == context->path_prefix->st_dev) {
+			stbuf.st_dev == path_prefix->st_dev) {
 				/* If |rewritten| exists on the same device as
 				 * path_prefix->st_dev, record the rewritten one
 				 * instead of the original path.
@@ -402,8 +425,7 @@ read_trace_cb  (struct tep_event *event,
 			path = rewritten;
 		}
 	}
-	trace_add_path (context->parent, path, context->files,
-		context->num_files, context->force_ssd_mode);
+	trace_add_path (parent, path, files, num_files, force_ssd_mode);
 
 out:
 	free (path);
