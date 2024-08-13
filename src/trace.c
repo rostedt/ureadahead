@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/syscall.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include <blkid.h>
 #define NO_INLINE_FUNCS
@@ -117,14 +119,32 @@ static const char *EVENTS[][2] = {
 	/* required events for trace to work */
 	{FS_SYSTEM, "do_sys_open"},
 	{FS_SYSTEM, "open_exec"},
-	/* optional events follow */
-	{FS_SYSTEM, "uselib"},
+	/* The below events can also work */
 	{FILEMAP_SYSTEM, "mm_filemap_fault"},
 	{FILEMAP_SYSTEM, "mm_filemap_get_pages"},
-	{FILEMAP_SYSTEM, "mm_filemap_map_pages"}};
+	{FILEMAP_SYSTEM, "mm_filemap_map_pages"},
+	/* optional events follow */
+	{FS_SYSTEM, "uselib"}};
 
 #define NR_REQUIRED_EVENTS 2
+#define NR_ALTERNATE_REQUIRED_EVENTS (2 + 3)
 #define NR_EVENTS (sizeof (EVENTS) / sizeof (EVENTS[0]))
+
+#define _STRINGIFY(x) #x
+#define STRINGIFY(x) _STRINGIFY(x)
+
+typedef unsigned long long u64;
+typedef long long s64;
+
+/* glibc does not define getdents64() */
+struct linux_dirent64 {
+	u64		d_ino;
+	s64		d_off;
+	unsigned short	d_reclen;
+	unsigned char	d_type;
+	char		d_name[];
+};
+#define getdents64(fd, dirp, count) syscall(SYS_getdents64, fd, buf, BUFSIZ);
 
 /* A half-open file range */
 struct file_map {
@@ -142,6 +162,7 @@ struct inode_data {
 	/* a sorted array of file maps */
 	struct file_map			*map;
 	int				nr_maps;
+	int				order;
 	char				*name;
 };
 
@@ -219,7 +240,9 @@ static int                   cmp_inodes_range   (const void *A, const void *B);
 static int                   cmp_inodes         (const void *A, const void *B);
 static struct device_data   *add_device         (struct device_data **device_hash, dev_t dev);
 static struct device_data   *find_device        (struct device_data **device_hash, dev_t dev);
-
+static void		 add_inodes	(struct device_data **device_hash,
+					 PackFile **files, size_t *num_files,
+					 int force_ssd_mode);
 
 static void
 sig_interrupt (int signum)
@@ -247,6 +270,8 @@ trace (int daemonise,
 	size_t              num_files = 0;
 
 	if (! use_existing_trace_events) {
+		bool failed = false;
+
 		for (int i = 0; i < NR_EVENTS; i++) {
 			int ret;
 			enum tracefs_enable_state old_state = tracefs_event_is_enabled (NULL, EVENTS[i][0], EVENTS[i][1]);
@@ -254,6 +279,8 @@ trace (int daemonise,
 			ret = tracefs_event_enable (NULL, EVENTS[i][0], EVENTS[i][1]);
 			if (ret < 0) {
 				if (i < NR_REQUIRED_EVENTS) {
+					failed = true;
+				} else if (failed && i < NR_ALTERNATE_REQUIRED_EVENTS) {
 					nih_error ("Failed to enable %s", EVENTS[i][1]);
 					nih_error_raise_system ();
 					return -1;
@@ -513,6 +540,11 @@ read_trace (const void *parent,
 		goto out;
 	}
 
+	if (!*num_files) {
+		/* Read the inodes directly */
+		add_inodes (context.device_hash, files, num_files, force_ssd_mode);
+	}
+
 	/* Remove blocks no process touched if we have these events */
 	if (context.filemap_fault.event != NULL &&
 	    context.filemap_map_pages.event != NULL &&
@@ -526,6 +558,211 @@ out:
 	tep_free (tep);
 	free_device_hash (context.device_hash);
 	return err;
+}
+
+struct dir_stack {
+	struct dir_stack		*next;
+	char				*dir;
+};
+
+static void push_dir(struct dir_stack **dirs, char *dir)
+{
+	struct dir_stack *d;
+
+	d = malloc(sizeof(*d));
+	nih_assert (d != NULL);
+
+	d->dir = strdup(dir);
+	nih_assert (d->dir != NULL);
+
+	d->next = *dirs;
+	*dirs = d;
+}
+
+static char *pop_dir(struct dir_stack **dirs)
+{
+	struct dir_stack *d = *dirs;
+	char *dir;
+
+	if (!d)
+		return NULL;
+
+	dir = d->dir;
+	*dirs = d->next;
+	free(d);
+
+	return dir;
+}
+
+/*
+ * Given a specific device, map files to the recorded inodes. It doesn't
+ * matter if two files have the same inode, only one is needed.
+ * The pages pulled in via one of the inode files via the readahead()
+ * system call will work for all the inodes files.
+ *
+ * Returns the number of inodes that were mapped + inos
+ */
+static int map_inodes(struct device_data *dev, unsigned device, char *fs,
+		      struct inode_data **inodes)
+{
+	struct inode_data *inode;
+	char filename[PATH_MAX];
+	struct linux_dirent64 *dent;
+	struct stat st;
+	struct dir_stack *dirs = NULL;
+	int found_inos = 0;
+	char buf[BUFSIZ];
+	int inos = 0;
+	char *dir;
+	int bpos;
+	int fd;
+	int n;
+
+	/*
+	 * Use a stack instead of recursion to process the files in
+	 * an entire directory before going to the next one.
+	 */
+	push_dir(&dirs, fs);
+
+	while ((dir = pop_dir(&dirs))) {
+		/* If we are done, just pop the rest of the dirs */
+		if (found_inos == dev->nr_inodes) {
+			free(dir);
+			continue;
+		}
+
+		fd = open(dir, O_RDONLY | O_DIRECTORY);
+		if (fd < 0)
+			continue;
+
+		/* For root do not append '/' to the files */
+		if (dir[1] == '\0')
+			dir[0] = '\0';
+
+		for (;;) {
+			/* Grab a bunch of entries at once */
+			n = getdents64(fd, buf, BUF_SIZE);
+			if (n <= 0)
+				break;
+
+			for (bpos = 0; bpos < n; bpos += dent->d_reclen) {
+				dent = (struct linux_dirent64 *)(buf + bpos);
+
+				if (strcmp(dent->d_name, ".") == 0 ||
+				    strcmp(dent->d_name, "..") == 0)
+					continue;
+
+				switch(dent->d_type) {
+				case DT_DIR:
+					if (fstatat(fd, dent->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0)
+						continue;
+
+					/* Make sure we stay on this device */
+					if (st.st_dev != device)
+						continue;
+
+					snprintf(filename, PATH_MAX,
+						 "%s/%s", dir, dent->d_name);
+					push_dir(&dirs, filename);
+
+					break;
+				case DT_REG:
+					inode = find_inode(dev, dent->d_ino);
+					if (inode && !inode->name) {
+						snprintf(filename, PATH_MAX,
+							 "%s/%s", dir, dent->d_name);
+						inode->name = strdup(filename);
+						nih_assert (inode->name != NULL);
+						/* Need to sort the inodes by order */
+						inodes[inos++] = inode;
+						inode->dev_name = dev->name;
+						/*
+						 * No need to search more
+						 * if we found everything
+						 */
+						if (++found_inos == dev->nr_inodes)
+							goto last;
+					}
+					break;
+				}
+			}
+		}
+ last:
+		close(fd);
+		free(dir);
+	}
+
+	return inos;
+}
+
+static int cmp_inode_order(const void *A, const void *B)
+{
+	struct inode_data * const *a = A;
+	struct inode_data * const *b = B;
+
+	if ((*a)->order < (*b)->order)
+		return -1;
+
+	return (*a)->order > (*b)->order;
+}
+
+static void
+add_inodes (struct device_data **device_hash, PackFile **files, size_t *num_files,
+	    int force_ssd_mode)
+{
+	unsigned int major, minor, device;
+	struct inode_data **inodes;
+	struct device_data *dev;
+	char mapname[PATH_MAX];
+	char *line = NULL;
+	size_t len = 0;
+	FILE *fp;
+	int inos;
+	int ret;
+	int i;
+
+	/*
+	 * First map the devices found in the trace to the file systems they
+	 * represent.
+	 */
+	fp = fopen("/proc/self/mountinfo", "r");
+
+	while (getline(&line, &len, fp) > 0) {
+		ret = sscanf(line, "%*d %*d %d:%d / %"STRINGIFY(PATH_MAX)"s",
+			     &major, &minor, mapname);
+		if (ret != 3)
+			continue;
+
+		device = makedev(major, minor);
+		dev = find_device (device_hash, device);
+		if (!dev)
+			continue;
+
+		/*
+		 * Create an array of all the inodes, to sort them in the order they
+		 * were found in the trace.
+		 */
+		inodes = calloc(dev->nr_inodes, sizeof(*inodes));
+		nih_assert (inodes != NULL);
+
+		dev->name = strdup(mapname);
+		nih_assert(dev->name);
+
+		inos = map_inodes(dev, device, mapname, inodes);
+
+		/* Add the files in order of when they were found */
+		qsort(inodes, inos, sizeof(*inodes), cmp_inode_order);
+
+		for (i = 0; i < inos; i++) {
+			trace_add_path (inodes[i], inodes[i]->name,
+					files, num_files,
+					force_ssd_mode);
+		}
+		free(inodes);
+
+	}
+	fclose(fp);
+	free(line);
 }
 
 static void
@@ -633,8 +870,8 @@ read_trace_cb  (struct tep_event *event,
 {
 	struct read_trace_context *context = read_trace_context;
 
-	if ((event->id == context->do_sys_open->id) ||
-	    (event->id == context->open_exec->id) ||
+	if ((context->do_sys_open && event->id == context->do_sys_open->id) ||
+	    (context->open_exec && event->id == context->open_exec->id) ||
 	    (context->uselib && event->id == context->uselib->id))
 		return read_path_trace (event, record, context->parent,
 				        context->path_prefix_filter,
@@ -1550,7 +1787,7 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 	switch (inode->nr_maps) {
 	case 0:
 		/* Allocate 2: 1 for this element an 1 for the FILEMAP_START_MARK */
-		map = malloc (sizeof(*inode->map) * 2);
+		map = calloc (sizeof(*inode->map), 2);
 		nih_assert (map != NULL);
 
 		/* Add a buffer element at the beginning for cmp_file_map_range() */
@@ -1657,7 +1894,7 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 	switch (dev->nr_inodes) {
 	case 0:
 		/* Add a marker to the beginning of the array for the range compare */
-		inode = malloc (sizeof(key) * 2);
+		inode = calloc (sizeof(key), 2);
 		nih_assert (inode != NULL);
 		inode->inode = FILEMAP_START_MARK;
 		inode++;
@@ -1705,7 +1942,8 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 	}
 	memset (inode, 0, sizeof(*inode));
 	inode->inode = ino;
-	dev->nr_inodes++;
+	/* Keep track of the order of inodes as they are found */
+	inode->order = dev->nr_inodes++;
 	return inode;
 }
 
