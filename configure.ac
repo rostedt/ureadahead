@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.62)
-AC_INIT([ureadahead], [0.100.0], [ubuntu-devel@lists.ubuntu.com])
+AC_INIT([ureadahead], [0.100.2], [ubuntu-devel@lists.ubuntu.com])
 AC_COPYRIGHT([[Copyright © 2009 Canonical Ltd.]])
 AC_CONFIG_SRCDIR([src/ureadahead.c])
 AC_CONFIG_MACRO_DIR([m4])
