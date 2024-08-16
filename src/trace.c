@@ -126,9 +126,11 @@ static const char *EVENTS[][2] = {
 #define NR_REQUIRED_EVENTS 2
 #define NR_EVENTS (sizeof (EVENTS) / sizeof (EVENTS[0]))
 
-/* An inclusive file range */
+/* A half-open file range */
 struct file_map {
+	/* inclusive */
 	off_t				start;
+	/* exclusive */
 	off_t				end;
 };
 
@@ -545,8 +547,7 @@ remove_untouched_blocks  (const void *parent,
 		PackBlock *block = &file->blocks[blockidx];
 		struct file_map block_range = {
 			block->offset >> PAGE_SHIFT,
-			/* -1 since file_map is an inclusive interval */
-			(block->offset + block->length - 1) >> PAGE_SHIFT};
+			(block->offset + block->length) >> PAGE_SHIFT};
 
 		/* Prepare the sorted filemap ranges for the next file */
 		if (block->pathidx != pathidx) {
@@ -596,17 +597,19 @@ remove_untouched_blocks  (const void *parent,
 				break;
 
 			new_offset = nih_max (range->start << PAGE_SHIFT, block->offset);
-			/* +1 to convert it to an open interval */
-			new_end = nih_min ((range->end + 1) << PAGE_SHIFT, block->offset + block->length);
+			new_end = nih_min (range->end << PAGE_SHIFT, block->offset + block->length);
 			new_length = new_end - new_offset;
 			new_physical = block->physical + new_offset - block->offset;
 
-			reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
-				parent, sizeof(PackBlock) * (++num_blocks)));
-			reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
-			reduced_blocks[num_blocks - 1].offset = new_offset;
-			reduced_blocks[num_blocks - 1].length = new_length;
-			reduced_blocks[num_blocks - 1].physical = new_physical;
+			/* new_length is zero when they touch each other. */
+			if (new_length > 0) {
+				reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
+					parent, sizeof(PackBlock) * (++num_blocks)));
+				reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
+				reduced_blocks[num_blocks - 1].offset = new_offset;
+				reduced_blocks[num_blocks - 1].length = new_length;
+				reduced_blocks[num_blocks - 1].physical = new_physical;
+			}
 
 			/* Next block still can overlap with this range. Next blockidx loop. */
 			if (range->end > block_range.end)
@@ -1469,7 +1472,7 @@ static void trace_add_file_map (struct device_data **device_hash,
 		inode = add_inode (dev, ino);
 
 	key.start = index;
-	key.end = last_index;
+	key.end = last_index + 1; /* make it a half-open interval */
 
 	/*
 	 * The cmp_file_map will match not only if it finds a mapping that the
@@ -1484,7 +1487,7 @@ static void trace_add_file_map (struct device_data **device_hash,
 		return;
 	}
 
-	if (map->start <= index && map->end >= last_index)
+	if (map->start <= key.start && map->end >= key.end)
 		/* Nothing to do, it is already accounted for */
 		return;
 
@@ -1499,8 +1502,8 @@ static void trace_add_file_map (struct device_data **device_hash,
 		upper_bound++;
 
 	/* extend the first map to the new range */
-	lower_bound->start = nih_min (lower_bound->start, index);
-	lower_bound->end = nih_max (upper_bound->end, last_index);
+	lower_bound->start = nih_min (lower_bound->start, key.start);
+	lower_bound->end = nih_max (upper_bound->end, key.end);
 
 	/* If there's only one overlapping, then we are done */
 	if (lower_bound == upper_bound)
@@ -1574,7 +1577,8 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 		break;
 	default:
 		key.start = index;
-		key.end = last_index;
+		/* convert it from an inclusive interval to a half-open interval */
+		key.end = last_index + 1;
 
 		/*
 		 * The cmp_file_map_range() will return the map that is after
@@ -1605,7 +1609,8 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 		map = &map[idx];
 	}
 	map->start = index;
-	map->end = last_index;
+	/* convert it from an inclusive interval to a half-open interval */
+	map->end = last_index + 1;
 	inode->nr_maps++;
 }
 
