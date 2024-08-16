@@ -752,7 +752,7 @@ add_inodes (struct device_data **device_hash, PackFile **files, size_t *num_file
 		qsort(inodes, inos, sizeof(*inodes), cmp_inode_order);
 
 		for (i = 0; i < inos; i++) {
-			trace_add_path (inodes[i], inodes[i]->name,
+			trace_add_path (NULL, inodes[i]->name,
 					files, num_files,
 					force_ssd_mode);
 		}
