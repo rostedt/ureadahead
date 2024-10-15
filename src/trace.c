@@ -992,6 +992,34 @@ fix_path (char *pathname)
 }
 
 
+/* Look for given pathname from the hash table,
+ * and insert new one if it's not in it yet.
+ *
+ * @path_hash: Hash table to look for string from.
+ * @pathname: path name to look for.
+ *
+ * Returns TRUE on new insertion (not found).
+ * Returns FALSE on duplicate entry.
+ */
+static inline int
+maybe_insert_new_path (NihHash *path_hash,
+		       const char *pathname)
+{
+	if (nih_hash_lookup (path_hash, pathname)) {
+		return FALSE;
+	}
+
+	NihListEntry *entry;
+
+	entry = NIH_MUST (nih_list_entry_new (path_hash));
+	entry->str = NIH_MUST (nih_strdup (entry, pathname));
+
+	nih_hash_add (path_hash, &entry->entry);
+
+	return TRUE;
+}
+
+
 static int
 trace_add_path (const void *parent,
 		const char *pathname,
@@ -1006,6 +1034,12 @@ trace_add_path (const void *parent,
 	PackPath *      path;
 	static NihHash *inode_hash = NULL;
 	nih_local char *inode_key = NULL;
+
+	/* Used when the file to be included turns out
+	 * to be a symlink.
+	 * stores a resolved path from the symlink.
+	 */
+	static char resolved_pathname[PATH_MAX];
 
 	nih_assert (pathname != NULL);
 	nih_assert (files != NULL);
@@ -1040,23 +1074,41 @@ trace_add_path (const void *parent,
 	if (! path_hash)
 		path_hash = NIH_MUST (nih_hash_string_new (NULL, 2500));
 
-	if (nih_hash_lookup (path_hash, pathname)) {
+	/* Try to insert a new path into hash table,
+	 * or abort in case if it already exists (processed).
+	 */
+	if (! maybe_insert_new_path (path_hash, pathname))
 		return 0;
-	} else {
-		NihListEntry *entry;
 
-		entry = NIH_MUST (nih_list_entry_new (path_hash));
-		entry->str = NIH_MUST (nih_strdup (entry, pathname));
+	/* Start checking the file type to see if it can be
+	 * resolved down to some ordinary file.
+	 */
+	if (lstat (pathname, &statbuf) < 0)
+		return 0;
 
-		nih_hash_add (path_hash, &entry->entry);
+	/* Check if it is a symlink,
+	 * and resolve to a file that symlink points to.
+	 */
+	if (S_ISLNK (statbuf.st_mode)) {
+		if (! realpath (pathname, resolved_pathname))
+			return 0;
+
+		pathname = resolved_pathname;
+
+		if (! maybe_insert_new_path (path_hash, resolved_pathname))
+			return 0;
+
+		/* Update statbuf with the actual information of the file
+		 * that symlink points to.
+		 */
+		if (stat (resolved_pathname, &statbuf) < 0)
+			return 0;
 	}
 
-	/* Make sure that we have an ordinary file
-	 * This avoids us opening a fifo or socket or symlink.
+	/* Making sure if it is an ordinary file and
+	 * not a fifo or socket.
 	 */
-	if ((lstat (pathname, &statbuf) < 0)
-	    || (S_ISLNK (statbuf.st_mode))
-	    || (! S_ISREG (statbuf.st_mode)))
+	if (! S_ISREG (statbuf.st_mode))
 		return 0;
 
 	/* Open and stat again to get the genuine details, in case it
