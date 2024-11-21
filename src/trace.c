@@ -244,6 +244,18 @@ static void		 add_inodes	(struct device_data **device_hash,
 					 PackFile **files, size_t *num_files,
 					 int force_ssd_mode);
 
+static inline off_t
+min (const off_t a, const off_t b)
+{
+	return a > b ? b : a;
+}
+
+static inline off_t
+max (const off_t a, const off_t b)
+{
+	return a > b ? a : b;
+}
+
 static void
 sig_interrupt (int signum)
 {
@@ -833,8 +845,8 @@ remove_untouched_blocks  (const void *parent,
 			if (cmp_file_map (range, &block_range) > 0)
 				break;
 
-			new_offset = nih_max (range->start << PAGE_SHIFT, block->offset);
-			new_end = nih_min (range->end << PAGE_SHIFT, block->offset + block->length);
+			new_offset = max (range->start << PAGE_SHIFT, block->offset);
+			new_end = min (range->end << PAGE_SHIFT, block->offset + block->length);
 			new_length = new_end - new_offset;
 			new_physical = block->physical + new_offset - block->offset;
 
@@ -1437,9 +1449,9 @@ trace_add_extents (const void *parent,
 			continue;
 
 		/* Work out the intersection of the chunk and extent */
-		start = nih_max (fiemap->fm_start,
+		start = max (fiemap->fm_start,
 				 fiemap->fm_extents[j].fe_logical);
-		end = nih_min ((fiemap->fm_start + fiemap->fm_length),
+		end = min ((fiemap->fm_start + fiemap->fm_length),
 			       (fiemap->fm_extents[j].fe_logical
 				+ fiemap->fm_extents[j].fe_length));
 
@@ -1739,8 +1751,8 @@ static void trace_add_file_map (struct device_data **device_hash,
 		upper_bound++;
 
 	/* extend the first map to the new range */
-	lower_bound->start = nih_min (lower_bound->start, key.start);
-	lower_bound->end = nih_max (upper_bound->end, key.end);
+	lower_bound->start = min (lower_bound->start, key.start);
+	lower_bound->end = max (upper_bound->end, key.end);
 
 	/* If there's only one overlapping, then we are done */
 	if (lower_bound == upper_bound)
