@@ -22,11 +22,9 @@
 #include <limits.h>
 #include <sys/types.h>
 
-#include <nih/macros.h>
 #include <nih/list.h>
 
 
-NIH_BEGIN_EXTERN
 
 typedef struct path_prefix_option {
         dev_t st_dev;
@@ -40,7 +38,5 @@ int trace (int daemonise, int timeout,
            const PathPrefixOption *path_prefix,
            int use_existing_trace_events,
            int force_ssd_mode);
-
-NIH_END_EXTERN
 
 #endif /* UREADAHEAD_TRACE_H */

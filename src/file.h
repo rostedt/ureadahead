@@ -21,13 +21,6 @@
 
 #include <stdio.h>
 
-#include <nih/macros.h>
-
-
-NIH_BEGIN_EXTERN
-
 char *fgets_alloc (const void *parent, FILE *stream);
-
-NIH_END_EXTERN
 
 #endif /* UREADAHEAD_FILE_H */

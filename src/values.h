@@ -29,15 +29,9 @@
 
 #include <fcntl.h>
 
-#include <nih/macros.h>
-
-
-NIH_BEGIN_EXTERN
 
 int get_value (int dfd, const char *path, int *value);
 int set_value (int dfd, const char *path, int value, int *oldvalue);
-
-NIH_END_EXTERN
 
 #endif /* UREADAHEAD_VALUES_H */
 
