@@ -25,6 +25,7 @@
 
 
 #include <stdio.h>
+#include <assert.h>
 #include <string.h>
 
 #include <nih/macros.h>
@@ -53,7 +54,7 @@ fgets_alloc (const void *parent,
         size_t buf_sz = 0;
 	size_t buf_len = 0;
 
-	nih_assert (stream != NULL);
+	assert (stream != NULL);
 
 	for (;;) {
 		char *ret;

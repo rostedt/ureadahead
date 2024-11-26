@@ -33,6 +33,7 @@
 #include <sys/param.h>
 
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -136,9 +137,9 @@ path_prefix_option (NihOption  *option,
 	struct stat st;
 	dev_t st_dev;
 
-	nih_assert (option != NULL);
-	nih_assert (option->value != NULL);
-	nih_assert (arg != NULL);
+	assert (option != NULL);
+	assert (option->value != NULL);
+	assert (arg != NULL);
 
 	value = (PathPrefixOption *)option->value;
 
@@ -166,9 +167,9 @@ static int
 dup_string_handler (NihOption   *option,
 		    const char  *arg)
 {
-	nih_assert (option != NULL);
-	nih_assert (option->value != NULL);
-	nih_assert (arg != NULL);
+	assert (option != NULL);
+	assert (option->value != NULL);
+	assert (arg != NULL);
 
 	char **value = (char **)option->value;
 	*value = NIH_MUST (nih_strdup (NULL, arg));
@@ -181,9 +182,9 @@ sort_option (NihOption  *option,
 {
 	SortOption *value;
 
-	nih_assert (option != NULL);
-	nih_assert (option->value != NULL);
-	nih_assert (arg != NULL);
+	assert (option != NULL);
+	assert (option->value != NULL);
+	assert (arg != NULL);
 
 	value = (SortOption *)option->value;
 

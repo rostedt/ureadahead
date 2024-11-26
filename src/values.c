@@ -31,6 +31,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <assert.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -50,8 +51,8 @@ get_value (int         dfd,
 	char    buf[80];
 	ssize_t len;
 
-	nih_assert (path != NULL);
-	nih_assert (value != NULL);
+	assert (path != NULL);
+	assert (value != NULL);
 
 	fd = openat (dfd, path, O_RDONLY);
 	if (fd < 0)
@@ -83,7 +84,7 @@ set_value (int         dfd,
 	char    buf[80];
 	ssize_t len;
 
-	nih_assert (path != NULL);
+	assert (path != NULL);
 
 	fd = openat (dfd, path, O_RDWR);
 	if (fd < 0)
@@ -100,7 +101,7 @@ set_value (int         dfd,
 		buf[len] = '\0';
 		*oldvalue = atoi (buf);
 
-		nih_assert (lseek (fd, 0, SEEK_SET) == 0);
+		assert (lseek (fd, 0, SEEK_SET) == 0);
 	}
 
 	snprintf (buf, sizeof buf, "%d", value);
@@ -112,7 +113,7 @@ set_value (int         dfd,
 		return -1;
 	}
 
-	nih_assert (len > 0);
+	assert (len > 0);
 
 	if (close (fd) < 0)
 		nih_return_system_error (-1);

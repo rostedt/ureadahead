@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <assert.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -468,11 +469,11 @@ init_filemap_tep (struct tep_handle *tep, const char *event_name,
 	if (! filemap->event)
 		return;
 	filemap->inode = tep_find_field (filemap->event, "i_ino");
-	nih_assert (filemap->inode != NULL);
+	assert (filemap->inode != NULL);
 	filemap->device = tep_find_field (filemap->event, "s_dev");
-	nih_assert (filemap->device != NULL);
+	assert (filemap->device != NULL);
 	filemap->index = tep_find_field (filemap->event, "index");
-	nih_assert (filemap->index != NULL);
+	assert (filemap->index != NULL);
 	filemap->last_index = tep_find_field (filemap->event, "last_index");
 	/* last_index can be NULL since fault does not have it */
 }
@@ -521,9 +522,9 @@ read_trace (const void *parent,
 	struct tep_handle *tep;
 	struct read_trace_context context;
 
-	nih_assert (path_prefix != NULL);
-	nih_assert (files != NULL);
-	nih_assert (num_files != NULL);
+	assert (path_prefix != NULL);
+	assert (files != NULL);
+	assert (num_files != NULL);
 
 	tep = tracefs_local_events_system (NULL, systems);
 	if (!tep)
@@ -582,10 +583,10 @@ static void push_dir(struct dir_stack **dirs, char *dir)
 	struct dir_stack *d;
 
 	d = malloc(sizeof(*d));
-	nih_assert (d != NULL);
+	assert (d != NULL);
 
 	d->dir = strdup(dir);
-	nih_assert (d->dir != NULL);
+	assert (d->dir != NULL);
 
 	d->next = *dirs;
 	*dirs = d;
@@ -684,7 +685,7 @@ static int map_inodes(struct device_data *dev, unsigned device, char *fs,
 						snprintf(filename, PATH_MAX,
 							 "%s/%s", dir, dent->d_name);
 						inode->name = strdup(filename);
-						nih_assert (inode->name != NULL);
+						assert (inode->name != NULL);
 						/* Need to sort the inodes by order */
 						inodes[inos++] = inode;
 						inode->dev_name = dev->name;
@@ -755,10 +756,10 @@ add_inodes (struct device_data **device_hash, PackFile **files, size_t *num_file
 		 * were found in the trace.
 		 */
 		inodes = calloc(dev->nr_inodes, sizeof(*inodes));
-		nih_assert (inodes != NULL);
+		assert (inodes != NULL);
 
 		dev->name = strdup(mapname);
-		nih_assert(dev->name);
+		assert(dev->name);
 
 		inos = map_inodes(dev, device, mapname, inodes);
 
@@ -961,7 +962,7 @@ fix_path (char *pathname)
 {
 	char *ptr;
 
-	nih_assert (pathname != NULL);
+	assert (pathname != NULL);
 
 	for (ptr = pathname; *ptr; ptr++) {
 		size_t len;
@@ -1053,9 +1054,9 @@ trace_add_path (const void *parent,
 	 */
 	static char resolved_pathname[PATH_MAX];
 
-	nih_assert (pathname != NULL);
-	nih_assert (files != NULL);
-	nih_assert (num_files != NULL);
+	assert (pathname != NULL);
+	assert (files != NULL);
+	assert (num_files != NULL);
 
 	/* We can't really deal with relative paths since we don't know
 	 * the working directory that they were opened from.
@@ -1220,7 +1221,7 @@ trace_add_path (const void *parent,
 static int
 ignore_path (const char *pathname)
 {
-	nih_assert (pathname != NULL);
+	assert (pathname != NULL);
 
 	if (! strncmp (pathname, "/proc/", 6))
 		return TRUE;
@@ -1254,8 +1255,8 @@ trace_file (const void *parent,
 	int             rotational;
 	PackFile *      file;
 
-	nih_assert (files != NULL);
-	nih_assert (num_files != NULL);
+	assert (files != NULL);
+	assert (num_files != NULL);
 
 	/* Return any existing file structure for this device */
 	for (size_t i = 0; i < *num_files; i++)
@@ -1324,10 +1325,10 @@ trace_add_chunks (const void *parent,
 	off_t                    num_pages;
 	nih_local unsigned char *vec = NULL;
 
-	nih_assert (file != NULL);
-	nih_assert (path != NULL);
-	nih_assert (fd >= 0);
-	nih_assert (size > 0);
+	assert (file != NULL);
+	assert (path != NULL);
+	assert (fd >= 0);
+	assert (size > 0);
 
 	if (page_size < 0)
 		page_size = sysconf (_SC_PAGESIZE);
@@ -1416,7 +1417,7 @@ get_fiemap (const void *parent,
 {
 	struct fiemap *fiemap;
 
-	nih_assert (fd >= 0);
+	assert (fd >= 0);
 
 	fiemap = NIH_MUST (nih_new (parent, struct fiemap));
 	memset (fiemap, 0, sizeof (struct fiemap));
@@ -1471,10 +1472,10 @@ trace_add_extents (const void *parent,
 {
 	nih_local struct fiemap *fiemap = NULL;
 
-	nih_assert (file != NULL);
-	nih_assert (path != NULL);
-	nih_assert (fd >= 0);
-	nih_assert (size > 0);
+	assert (file != NULL);
+	assert (path != NULL);
+	assert (fd >= 0);
+	assert (size > 0);
 
 	/* Get the extents map for this chunk, then iterate the extents
 	 * and put those in the pack instead of the chunks.
@@ -1532,18 +1533,18 @@ trace_add_groups (const void *parent,
 	const char *devname;
 	ext2_filsys fs = NULL;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	devname = blkid_devno_to_devname (file->dev);
 	if (devname
 	    && (! ext2fs_open (devname, 0, 0, 0, unix_io_manager, &fs))) {
-		nih_assert (fs != NULL);
+		assert (fs != NULL);
 		size_t            num_groups = 0;
 		nih_local size_t *num_inodes = NULL;
 		size_t            mean = 0;
 		size_t            hits = 0;
 
-		nih_assert (fs != NULL);
+		assert (fs != NULL);
 
 		/* Calculate the number of inode groups on this filesystem */
 		num_groups = ((fs->super->s_blocks_count - 1)
@@ -1594,8 +1595,8 @@ block_compar (const void *a,
 	const PackBlock *block_a = a;
 	const PackBlock *block_b = b;
 
-	nih_assert (block_a != NULL);
-	nih_assert (block_b != NULL);
+	assert (block_a != NULL);
+	assert (block_b != NULL);
 
 	if (block_a->physical < block_b->physical) {
 		return -1;
@@ -1610,7 +1611,7 @@ static int
 trace_sort_blocks (const void *parent,
 		   PackFile *  file)
 {
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	/* Sort the blocks array by physical location, since these are
 	 * read in a separate pass to opening files, there's no reason
@@ -1630,8 +1631,8 @@ path_compar (const void *a,
 	const PackPath * const *path_a = a;
 	const PackPath * const *path_b = b;
 
-	nih_assert (path_a != NULL);
-	nih_assert (path_b != NULL);
+	assert (path_a != NULL);
+	assert (path_b != NULL);
 
 	if ((*path_a)->group < (*path_b)->group) {
 		return -1;
@@ -1654,7 +1655,7 @@ trace_sort_paths (const void *parent,
 	nih_local size_t *   new_idx = NULL;
 	PackPath *           new_paths;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	/* Sort the paths array by ext2fs inode group, ino_t then path.
 	 *
@@ -1852,7 +1853,7 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 	case 0:
 		/* Allocate 2: 1 for this element an 1 for the FILEMAP_START_MARK */
 		map = calloc (sizeof(*inode->map), 2);
-		nih_assert (map != NULL);
+		assert (map != NULL);
 
 		/* Add a buffer element at the beginning for cmp_file_map_range() */
 		map->start = FILEMAP_START_MARK;
@@ -1865,7 +1866,7 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 		map = inode->map - 1;
 		/* Allocate three. 2 for the elements and one for the FILEMAP_START_MARK */
 		map = realloc (map, sizeof(*inode->map) * 3);
-		nih_assert (map != NULL);
+		assert (map != NULL);
 
 		inode->map = map + 1;
 
@@ -1899,7 +1900,7 @@ static void add_map (struct inode_data *inode, off_t index, off_t last_index)
 		/* Set map to the start of the allocation */
 		map = inode->map - 1;
 		map = realloc (map, sizeof(*map) * (inode->nr_maps + 2));
-		nih_assert (map != NULL);
+		assert (map != NULL);
 		map++;
 		inode->map = map;
 
@@ -1959,7 +1960,7 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 	case 0:
 		/* Add a marker to the beginning of the array for the range compare */
 		inode = calloc (sizeof(key), 2);
-		nih_assert (inode != NULL);
+		assert (inode != NULL);
 		inode->inode = FILEMAP_START_MARK;
 		inode++;
 		dev->inodes = inode;
@@ -1967,7 +1968,7 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 	case 1:
 		inode = dev->inodes - 1;
 		inode = realloc (inode, sizeof(key) * 3);
-		nih_assert (inode != NULL);
+		assert (inode != NULL);
 		dev->inodes = inode + 1;
 
 		/* If the current element is greater than the new one, then move it */
@@ -1994,7 +1995,7 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 		/* Set to the start of the allocated array */
 		inode = dev->inodes - 1;
 		inode = realloc (inode, sizeof(key) * (dev->nr_inodes + 2));
-		nih_assert (inode != NULL);
+		assert (inode != NULL);
 		inode++;
 		dev->inodes = inode;
 
@@ -2067,7 +2068,7 @@ static struct device_data *add_device (struct device_data **device_hash,
 	int key = id & HASH_MASK;
 
 	dev = calloc (1, sizeof(*dev));
-	nih_assert (dev != NULL);
+	assert (dev != NULL);
 
 	dev->id = id;
 	dev->next = device_hash[key];

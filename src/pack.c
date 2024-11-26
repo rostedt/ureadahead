@@ -33,6 +33,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 #include <unistd.h>
@@ -129,7 +130,7 @@ pack_file_name_for_mount (const void *parent,
 {
 	char *file;
 
-	nih_assert (mount != NULL);
+	assert (mount != NULL);
 
 	/* Strip the initial slash, if it's the root mountpoint, just return
 	 * the default pack filename.
@@ -264,7 +265,7 @@ read_pack (const void *parent,
 	time_t          created;
 	char            buf[80];
 
-	nih_assert (filename != NULL);
+	assert (filename != NULL);
 
 	clock_gettime (CLOCK_MONOTONIC, &start);
 
@@ -406,8 +407,8 @@ write_pack (const char *filename,
 	char   hdr[8];
 	time_t now;
 
-	nih_assert (filename != NULL);
-	nih_assert (file != NULL);
+	assert (filename != NULL);
+	assert (file != NULL);
 
 	/* Open the file, making sure we truncate it and give it a
 	 * sane mode
@@ -501,8 +502,8 @@ print_time (const char *     message,
  	struct timespec end;
  	struct timespec span;
 
-	nih_assert (message != NULL);
-	nih_assert (start != NULL);
+	assert (message != NULL);
+	assert (start != NULL);
 
 	clock_gettime (CLOCK_MONOTONIC, &end);
 
@@ -535,8 +536,8 @@ pack_sort_compar (const void *a,
 	const struct pack_sort *ps_a;
 	const struct pack_sort *ps_b;
 
-	nih_assert (a != NULL);
-	nih_assert (b != NULL);
+	assert (a != NULL);
+	assert (b != NULL);
 
 	ps_a = a;
 	ps_b = b;
@@ -557,7 +558,7 @@ pack_dump (PackFile * file,
 	nih_local struct pack_sort *pack = NULL;
 	int                         page_size;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	page_size = sysconf (_SC_PAGESIZE);
 
@@ -594,7 +595,7 @@ pack_dump (PackFile * file,
 			}
 			break;
 		default:
-			nih_assert_not_reached ();
+			__builtin_unreachable ();
 		}
 	}
 
@@ -682,7 +683,7 @@ do_readahead (PackFile *file,
 	int             nr_open;
 	struct rlimit   nofile;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	/* Increase our maximum file open count so that we can actually
 	 * open everything; if the file is larger than the kernel limit,
@@ -721,7 +722,7 @@ do_readahead_hdd (PackFile *file,
 	ext2_filsys     fs = NULL;
 	nih_local int * fds = NULL;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	/* Adjust our CPU and I/O priority, we want to stay in the
 	 * foreground and hog all bandwidth to avoid jumping around the
@@ -745,7 +746,7 @@ do_readahead_hdd (PackFile *file,
 	devname = blkid_devno_to_devname (file->dev);
 	if (devname
 	    && (! ext2fs_open (devname, 0, 0, 0, unix_io_manager, &fs))) {
-		nih_assert (fs != NULL);
+		assert (fs != NULL);
 
 		for (size_t i = 0; i < file->num_groups; i++)
 			preload_inode_group (fs, file->groups[i]);
@@ -791,10 +792,10 @@ preload_inode_group (ext2_filsys fs,
 {
 	ext2_inode_scan scan = NULL;
 
-	nih_assert (fs != NULL);
+	assert (fs != NULL);
 
 	if (! ext2fs_open_inode_scan (fs, 0, &scan)) {
-		nih_assert (scan != NULL);
+		assert (scan != NULL);
 
 		if (! ext2fs_inode_scan_goto_blockgroup (scan, group)) {
 			struct ext2_inode inode;
@@ -824,7 +825,7 @@ do_readahead_ssd (PackFile *file,
 	pthread_t         thread[NUM_THREADS];
 	struct thread_ctx ctx;
 
-	nih_assert (file != NULL);
+	assert (file != NULL);
 
 	/* Can only --daemon for SSD */
 	if (daemonise) {
