@@ -186,6 +186,21 @@ struct filemap_tep {
 	struct tep_format_field  *last_index; /* May be NULL */
 };
 
+/* Hash table entry for processed path bookkeeping. */
+struct path_data {
+	struct path_data *next;
+	size_t length;
+	unsigned long hash;
+	char path[PACK_PATH_MAX+1];
+};
+
+/* Hash table entry for processed dev:inode bookkeeping. */
+struct dev_inode_data {
+	struct dev_inode_data *next;
+
+	dev_t dev_id;
+	ino_t inode;
+};
 
 /* Prototypes for static functions */
 static int       read_trace          (const void *parent,
@@ -244,6 +259,10 @@ static struct device_data   *find_device        (struct device_data **device_has
 static void		 add_inodes	(struct device_data **device_hash,
 					 PackFile **files, size_t *num_files,
 					 int force_ssd_mode);
+
+static int maybe_insert_path (struct path_data **path_table, const char *pathname);
+static int maybe_insert_dev_inode_pair (struct dev_inode_data **dev_inode_table,
+					dev_t dev_id, ino_t inode);
 
 static inline off_t
 min (const off_t a, const off_t b)
@@ -2120,4 +2139,76 @@ static struct device_data *find_device (struct device_data **device_hash,
 	}
 
 	return dev;
+}
+
+static int
+maybe_insert_path (struct path_data **path_table, const char *pathname)
+{
+	assert (pathname != NULL);
+	assert (path_table != NULL);
+
+	/* Simple DJB2 hashing. */
+	size_t i;
+	unsigned long hash = 5381;
+	size_t length = strlen (pathname);
+
+	for (i = 0; i < length; i++)
+		hash = ((hash << 5) + hash) + (unsigned long)pathname[i];
+
+	int key = hash & HASH_MASK;
+
+	struct path_data *data;
+	for (data = path_table[key]; data; data = data->next) {
+		if (data->hash == hash &&
+		    data->length == length &&
+		    strcmp (pathname, data->path) == 0)
+			return 0;
+	}
+
+	/* Path not found. add a new one,
+	 * and insert it to the start of linked list.
+	 */
+	data = calloc (1, sizeof (struct path_data));
+	assert (data != NULL);
+
+	data->hash = hash;
+	data->length = length;
+
+	strncpy (data->path, pathname, PACK_PATH_MAX);
+	data->path[PACK_PATH_MAX] = '\0';
+
+	data->next = path_table[key];
+	path_table[key] = data;
+
+	return 1;
+}
+
+static int
+maybe_insert_dev_inode_pair (struct dev_inode_data **dev_inode_table, dev_t dev_id, ino_t inode)
+{
+	assert (dev_inode_table != NULL);
+	/* We use inode for more uniquely distributed key
+	 * as opposed to device id.
+	 */
+	int key = inode & HASH_MASK;
+
+	struct dev_inode_data *data;
+	for (data = dev_inode_table[key]; data; data = data->next) {
+		if (data->inode == inode && data->dev_id == dev_id)
+			return 0;
+	}
+
+	/* dev/inode pair not found. add a new one,
+	 * and insert it to the start of linked list.
+	 */
+	data = calloc (1, sizeof (struct dev_inode_data));
+	assert (data != NULL);
+
+	data->dev_id = dev_id;
+	data->inode  = inode;
+
+	data->next = dev_inode_table[key];
+	dev_inode_table[key] = data;
+
+	return 1;
 }
