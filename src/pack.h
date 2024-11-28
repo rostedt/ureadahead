@@ -22,8 +22,6 @@
 #include <sys/types.h>
 
 #include <limits.h>
-
-#include <nih/macros.h>
 #include <nih/list.h>
 
 
@@ -72,8 +70,6 @@ typedef enum sort_option {
 } SortOption;
 
 
-NIH_BEGIN_EXTERN
-
 char *    pack_file_name            (const void *parent, const char *arg);
 char *    pack_file_name_for_mount  (const void *parent, const char *mount);
 char *    pack_file_name_for_device (const void *parent, dev_t dev);
@@ -85,8 +81,6 @@ int       write_pack                (const char *filename, PackFile *file);
 void      pack_dump                 (PackFile *file, SortOption sort);
 
 int       do_readahead              (PackFile *file, int daemonise);
-
-NIH_END_EXTERN
 
 #endif /* UREADAHEAD_PACK_H */
 
