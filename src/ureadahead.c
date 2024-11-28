@@ -172,7 +172,8 @@ dup_string_handler (NihOption   *option,
 	assert (arg != NULL);
 
 	char **value = (char **)option->value;
-	*value = NIH_MUST (nih_strdup (NULL, arg));
+	*value = nih_strdup (NULL, arg);
+	assert (*value != NULL);
 	return 0;
 }
 
@@ -269,8 +270,10 @@ main (int   argc,
 	 * (if any).
 	 */
 	filename = pack_file
-		? NIH_MUST (nih_strdup (NULL, pack_file))
+		? nih_strdup (NULL, pack_file)
 		: pack_file_name (NULL, args[0]);
+
+	assert (filename != NULL);
 
 	if (! force_trace) {
 		NihError *err;

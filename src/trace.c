@@ -393,7 +393,8 @@ trace (int daemonise,
 	for (size_t i = 0; i < num_files; i++) {
 		nih_local char *filename = NULL;
 		if (pack_file) {
-			filename = NIH_MUST (nih_strdup (NULL, pack_file));
+			filename = nih_strdup (NULL, pack_file);
+			assert (filename != NULL);
 		} else {
 			filename = pack_file_name_for_device (NULL,
 							      files[i].dev);
@@ -813,8 +814,9 @@ remove_untouched_blocks  (const void *parent,
 
 			if (! dev || ! inode) {
 				/* A file was opened but not read. We only want dentry. */
-				reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
-					parent, sizeof(PackBlock) * (++num_blocks)));
+				reduced_blocks = nih_realloc (reduced_blocks,
+					parent, sizeof(PackBlock) * (++num_blocks));
+				assert (reduced_blocks != NULL);
 				reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
 				reduced_blocks[num_blocks - 1].offset = 0;
 				reduced_blocks[num_blocks - 1].length = 0;
@@ -853,8 +855,9 @@ remove_untouched_blocks  (const void *parent,
 
 			/* new_length is zero when they touch each other. */
 			if (new_length > 0) {
-				reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
-					parent, sizeof(PackBlock) * (++num_blocks)));
+				reduced_blocks = nih_realloc (reduced_blocks,
+					parent, sizeof(PackBlock) * (++num_blocks));
+				assert (reduced_blocks != NULL);
 				reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
 				reduced_blocks[num_blocks - 1].offset = new_offset;
 				reduced_blocks[num_blocks - 1].length = new_length;
@@ -1084,8 +1087,10 @@ trace_add_path (const void *parent,
 	/* Use a hash table of paths to eliminate duplicate path names from
 	 * the table since that would waste pack space (and fds).
 	 */
-	if (! path_hash)
-		path_hash = NIH_MUST (nih_hash_string_new (NULL, 2500));
+	if (! path_hash) {
+		path_hash = nih_hash_string_new (NULL, 2500);
+		assert (path_hash != NULL);
+	}
 
 	/* Try to insert a new path into hash table,
 	 * or abort in case if it already exists (processed).
@@ -1161,9 +1166,10 @@ trace_add_path (const void *parent,
 	/* Grow the PackPath array and fill in the details for the new
 	 * path.
 	 */
-	file->paths = NIH_MUST (nih_realloc (file->paths, *files,
-					     (sizeof (PackPath)
-					      * (file->num_paths + 1))));
+	file->paths = nih_realloc (file->paths, *files,
+				   (sizeof (PackPath)
+				    * (file->num_paths + 1)));
+	assert (file->paths != NULL);
 
 	path = &file->paths[file->num_paths++];
 	memset (path, 0, sizeof (PackPath));
@@ -1181,12 +1187,15 @@ trace_add_path (const void *parent,
 	 * Use a hash table of dev_t/ino_t pairs to make sure we only
 	 * read the blocks of an actual file the first time.
 	 */
-	if (! inode_hash)
-		inode_hash = NIH_MUST (nih_hash_string_new (NULL, 2500));
+	if (! inode_hash) {
+		inode_hash = nih_hash_string_new (NULL, 2500);
+		assert (inode_hash != NULL);
+	}
 
-	inode_key = NIH_MUST (nih_sprintf (NULL, "%llu:%llu",
-					   (unsigned long long)statbuf.st_dev,
-					   (unsigned long long)statbuf.st_ino));
+	inode_key = nih_sprintf (NULL, "%llu:%llu",
+				 (unsigned long long)statbuf.st_dev,
+				 (unsigned long long)statbuf.st_ino);
+	assert (inode_key != NULL);
 
 	if (nih_hash_lookup (inode_hash, inode_key)) {
 		close (fd);
@@ -1194,7 +1203,8 @@ trace_add_path (const void *parent,
 	} else {
 		NihListEntry *entry;
 
-		entry = NIH_MUST (nih_list_entry_new (inode_hash));
+		entry = nih_list_entry_new (inode_hash);
+		assert (entry != NULL);
 		entry->str = inode_key;
 		nih_ref (entry->str, entry);
 
@@ -1270,15 +1280,17 @@ trace_file (const void *parent,
 		 * obviously won't work for virtual devices and the like, so
 		 * default to TRUE for now.
 		 */
-		filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
-						major (dev), minor (dev)));
+		filename = nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
+					major (dev), minor (dev));
+		assert (filename != NULL);
 		if (access (filename, R_OK) < 0) {
 			/* For devices managed by the scsi stack, the minor device number has to be
 			 * masked to find the queue/rotational file.
 			 */
 			nih_free (filename);
-			filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
-							major (dev), minor (dev) & 0xffff0));
+			filename = nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
+						major (dev), minor (dev) & 0xffff0);
+			assert (filename != NULL);
 		}
 
 		if (get_value (AT_FDCWD, filename, &rotational) < 0) {
@@ -1296,8 +1308,9 @@ trace_file (const void *parent,
 	/* Grow the PackFile array and fill in the details for the new
 	 * file.
 	 */
-	*files = NIH_MUST (nih_realloc (*files, parent,
-					(sizeof (PackFile) * (*num_files + 1))));
+	*files = nih_realloc (*files, parent,
+			      (sizeof (PackFile) * (*num_files + 1)));
+	assert (*files != NULL);
 
 	file = &(*files)[(*num_files)++];
 	memset (file, 0, sizeof (PackFile));
@@ -1344,7 +1357,8 @@ trace_add_chunks (const void *parent,
 
 	/* Grab the core memory map of the file */
 	num_pages = (size - 1) / page_size + 1;
-	vec = NIH_MUST (nih_alloc (NULL, num_pages));
+	vec = nih_alloc (NULL, num_pages);
+	assert (vec != NULL);
 	memset (vec, 0, num_pages);
 
 	if (mincore (buf, size, vec) < 0) {
@@ -1392,9 +1406,10 @@ trace_add_chunks (const void *parent,
 		} else {
 			PackBlock *block;
 
-			file->blocks = NIH_MUST (nih_realloc (file->blocks, parent,
-							      (sizeof (PackBlock)
-							       * (file->num_blocks + 1))));
+			file->blocks = nih_realloc (file->blocks, parent,
+						    (sizeof (PackBlock)
+						     * (file->num_blocks + 1)));
+			assert (file->blocks != NULL);
 
 			block = &file->blocks[file->num_blocks++];
 			memset (block, 0, sizeof (PackBlock));
@@ -1419,7 +1434,8 @@ get_fiemap (const void *parent,
 
 	assert (fd >= 0);
 
-	fiemap = NIH_MUST (nih_new (parent, struct fiemap));
+	fiemap = nih_new (parent, struct fiemap);
+	assert (fiemap != NULL);
 	memset (fiemap, 0, sizeof (struct fiemap));
 
 	fiemap->fm_start = offset;
@@ -1440,10 +1456,11 @@ get_fiemap (const void *parent,
 		/* Always allow room for one extra over what we were told,
 		 * so we know if they changed under us.
 		 */
-		fiemap = NIH_MUST (nih_realloc (fiemap, parent,
-						(sizeof (struct fiemap)
-						 + (sizeof (struct fiemap_extent)
-						    * (fiemap->fm_mapped_extents + 1)))));
+		fiemap = nih_realloc (fiemap, parent,
+				      (sizeof (struct fiemap)
+				       + (sizeof (struct fiemap_extent)
+				          * (fiemap->fm_mapped_extents + 1))));
+		assert (fiemap != NULL);
 		fiemap->fm_extent_count = fiemap->fm_mapped_extents + 1;
 		fiemap->fm_mapped_extents = 0;
 
@@ -1509,9 +1526,10 @@ trace_add_extents (const void *parent,
 				+ fiemap->fm_extents[j].fe_length));
 
 		/* Grow the blocks array to add the extent */
-		file->blocks = NIH_MUST (nih_realloc (file->blocks, parent,
-						      (sizeof (PackBlock)
-						       * (file->num_blocks + 1))));
+		file->blocks = nih_realloc (file->blocks, parent,
+					    (sizeof (PackBlock)
+					     * (file->num_blocks + 1)));
+		assert (file->blocks != NULL);
 
 		block = &file->blocks[file->num_blocks++];
 		memset (block, 0, sizeof (PackBlock));
@@ -1553,8 +1571,9 @@ trace_add_groups (const void *parent,
 		/* Fill in the pack path's group member, and count the
 		 * number of inodes in each group.
 		 */
-		num_inodes = NIH_MUST (nih_alloc (NULL, (sizeof (size_t)
-							 * num_groups)));
+		num_inodes = nih_alloc (NULL, (sizeof (size_t)
+					       * num_groups));
+		assert (num_inodes != NULL);
 		memset (num_inodes, 0, sizeof (size_t) * num_groups);
 
 		for (size_t i = 0; i < file->num_paths; i++) {
@@ -1568,9 +1587,10 @@ trace_add_groups (const void *parent,
 		for (size_t i = 0; i < num_groups; i++) {
 			mean += num_inodes[i];
 			if (num_inodes[i] > INODE_GROUP_PRELOAD_THRESHOLD) {
-				file->groups = NIH_MUST (nih_realloc (file->groups, parent,
-								      (sizeof (int)
-								       * (file->num_groups + 1))));
+				file->groups = nih_realloc (file->groups, parent,
+							    (sizeof (int)
+							     * (file->num_groups + 1)));
+				assert (file->groups != NULL);
 				file->groups[file->num_groups++] = i;
 				hits++;
 			}
@@ -1664,8 +1684,9 @@ trace_sort_paths (const void *parent,
 	 * so well, sorting by path was better, but this seems the best.
 	 * (it looks good on blktrace too)
 	 */
-	paths = NIH_MUST (nih_alloc (NULL, (sizeof (PackPath *)
-					    * file->num_paths)));
+	paths = nih_alloc (NULL, (sizeof (PackPath *)
+				  * file->num_paths));
+	assert (paths != NULL);
 
 	for (size_t i = 0; i < file->num_paths; i++)
 		paths[i] = &file->paths[i];
@@ -1677,8 +1698,9 @@ trace_sort_paths (const void *parent,
 	 * array, and then update the block array's path indexes to
 	 * match.
 	 */
-	new_idx = NIH_MUST (nih_alloc (NULL,
-				       (sizeof (size_t) * file->num_paths)));
+	new_idx = nih_alloc (NULL,
+			     (sizeof (size_t) * file->num_paths));
+	assert (new_idx != NULL);
 	for (size_t i = 0; i < file->num_paths; i++)
 		new_idx[paths[i] - file->paths] = i;
 
@@ -1688,8 +1710,9 @@ trace_sort_paths (const void *parent,
 	/* Finally generate a new paths array with the new order and
 	 * attach it to the file.
 	 */
-	new_paths = NIH_MUST (nih_alloc (parent,
-					 (sizeof (PackPath) * file->num_paths)));
+	new_paths = nih_alloc (parent,
+			       (sizeof (PackPath) * file->num_paths));
+	assert (new_paths != NULL);
 	for (size_t i = 0; i < file->num_paths; i++)
 		memcpy (&new_paths[new_idx[i]], &file->paths[i],
 			sizeof (PackPath));

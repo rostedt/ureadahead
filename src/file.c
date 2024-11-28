@@ -62,7 +62,8 @@ fgets_alloc (const void *parent,
 
 		if (buf_sz <= (buf_len + 1)) {
 			buf_sz += 4096;
-			buf = NIH_MUST (nih_realloc (buf, parent, buf_sz));
+			buf = nih_realloc (buf, parent, buf_sz);
+			assert (buf != NULL);
 		}
 
 		ret = fgets (buf + buf_len, buf_sz - buf_len, stream);

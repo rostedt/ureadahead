@@ -109,7 +109,7 @@ pack_file_name (const void *parent,
 
 	/* If we're not given an argument, fall back to the root pack */
 	if (! arg)
-		return NIH_MUST (nih_strdup (NULL, PATH_PACKDIR "/pack"));
+		return nih_strdup (NULL, PATH_PACKDIR "/pack");
 
 	/* Stat the path given, if it was a file, just return that as the
 	 * filename.
@@ -118,7 +118,7 @@ pack_file_name (const void *parent,
 		nih_return_system_error (NULL);
 
 	if (S_ISREG (statbuf.st_mode))
-		return NIH_MUST (nih_strdup (NULL, arg));
+		return nih_strdup (NULL, arg);
 
 	/* Otherwise treat it as a mountpoint name */
 	return pack_file_name_for_mount (parent, arg);
@@ -138,13 +138,14 @@ pack_file_name_for_mount (const void *parent,
 	if (mount[0] == '/')
 		mount++;
 	if (mount[0] == '\0')
-		return NIH_MUST (nih_strdup (NULL, PATH_PACKDIR "/pack"));
+		return nih_strdup (NULL, PATH_PACKDIR "/pack");
 
 	/* Prepend the mount point to the extension, and replace extra /s
 	 * with periods.
 	 */
-	file = NIH_MUST (nih_sprintf (parent, "%s/%s.pack",
-				      PATH_PACKDIR, mount));
+	file = nih_sprintf (parent, "%s/%s.pack",
+			    PATH_PACKDIR, mount);
+	assert (file != NULL);
 
 	for (char *ptr = file + strlen (PATH_PACKDIR) + 1; *ptr; ptr++)
 		if (*ptr == '/')
@@ -278,7 +279,8 @@ read_pack (const void *parent,
 	if (fstat (fileno (fp), &stat) == 0)
 		load_pages_in_core (fileno (fp), 0, stat.st_size);
 
-	file = NIH_MUST (nih_new (parent, PackFile));
+	file = nih_new (parent, PackFile);
+	assert (file != NULL);
 
 	/* Read and verify the header */
 	if (fread (hdr, 1, 8, fp) < 8) {
@@ -332,7 +334,8 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->groups = NIH_MUST (nih_alloc (file, sizeof (int) * file->num_groups));
+	file->groups = nih_alloc (file, sizeof (int) * file->num_groups);
+	assert (file->groups != NULL);
 
 	/* Read in the group entries */
 	if (fread (file->groups, sizeof (int), file->num_groups, fp) < file->num_groups) {
@@ -346,7 +349,8 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->paths = NIH_MUST (nih_alloc (file, sizeof (PackPath) * file->num_paths));
+	file->paths = nih_alloc (file, sizeof (PackPath) * file->num_paths);
+	assert (file->paths != NULL);
 
 	/* Read in the path entries */
 	if (fread (file->paths, sizeof (PackPath), file->num_paths, fp) < file->num_paths) {
@@ -360,7 +364,8 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->blocks = NIH_MUST (nih_alloc (file, sizeof (PackBlock) * file->num_blocks));
+	file->blocks = nih_alloc (file, sizeof (PackBlock) * file->num_blocks);
+	assert (file->blocks != NULL);
 
 	/* Read in the block entries */
 	if (fread (file->blocks, sizeof (PackBlock), file->num_blocks, fp) < file->num_blocks) {
@@ -563,8 +568,9 @@ pack_dump (PackFile * file,
 	page_size = sysconf (_SC_PAGESIZE);
 
 	/* Sort the pack file before we dump it */
-	pack = NIH_MUST (nih_alloc (NULL, (sizeof (struct pack_sort)
-					   * file->num_paths)));
+	pack = nih_alloc (NULL, (sizeof (struct pack_sort)
+				 * file->num_paths));
+	assert (pack != NULL);
 
 	for (size_t i = 0; i < file->num_paths; i++) {
 		pack[i].idx = i;
@@ -622,7 +628,8 @@ pack_dump (PackFile * file,
 			     ? (statbuf.st_size - 1) / page_size + 1
 			     : 0);
 
-		buf = NIH_MUST (nih_alloc (NULL, num_pages + 1));
+		buf = nih_alloc (NULL, num_pages + 1);
+		assert (buf != NULL);
 		memset (buf, '.', num_pages);
 		buf[num_pages] = '\0';
 
@@ -757,7 +764,8 @@ do_readahead_hdd (PackFile *file,
 	print_time ("Preload ext2fs inodes", &start);
 
 	/* Open all of the files */
-	fds = NIH_MUST (nih_alloc (NULL, sizeof (int) * file->num_paths));
+	fds = nih_alloc (NULL, sizeof (int) * file->num_paths);
+	assert (fds != NULL);
 	for (size_t i = 0; i < file->num_paths; i++) {
 		fds[i] = open (file->paths[i].path, O_RDONLY | O_NOATIME);
 		if (fds[i] < 0)
@@ -843,7 +851,8 @@ do_readahead_ssd (PackFile *file,
 
 	ctx.file = file;
 	ctx.idx = 0;
-	ctx.got = NIH_MUST (nih_alloc (NULL, sizeof (int) * file->num_paths));
+	ctx.got = nih_alloc (NULL, sizeof (int) * file->num_paths);
+	assert (ctx.got != NULL);
 	memset (ctx.got, 0, sizeof (int) * file->num_paths);
 
 	for (int t = 0; t < NUM_THREADS; t++)
