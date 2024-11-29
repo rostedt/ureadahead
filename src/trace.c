@@ -56,7 +56,6 @@
 #include <nih/alloc.h>
 #include <nih/string.h>
 #include <nih/main.h>
-#include <nih/logging.h>
 #include <nih/error.h>
 #include <tracefs.h>
 
@@ -64,6 +63,7 @@
 #include "pack.h"
 #include "values.h"
 #include "file.h"
+#include "logging.h"
 
 
 /**
@@ -311,32 +311,32 @@ trace (int daemonise,
 				if (i < NR_REQUIRED_EVENTS) {
 					failed = true;
 				} else if (failed && i < NR_ALTERNATE_REQUIRED_EVENTS) {
-					nih_error ("Failed to enable %s", EVENTS[i][1]);
+					log_error ("Failed to enable %s", EVENTS[i][1]);
 					nih_error_raise_system ();
 					return -1;
 				}
-				nih_debug ("Missing %s tracing: %d", EVENTS[i][1], ret);
+				log_debug ("Missing %s tracing: %d", EVENTS[i][1], ret);
 			}
 		}
 	}
 	/* cpu 0 to get the size per core, assuming all cpus have the same size */
 	if ((old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
-		nih_error ("Failed to get the buffer size");
+		log_error ("Failed to get the buffer size");
 		nih_error_raise_system ();
 		return -1;
 	}
 	if (tracefs_instance_set_buffer_size (NULL, 8192, -1) < 0) {
-		nih_error ("Failed to set the buffer size");
+		log_error ("Failed to set the buffer size");
 		nih_error_raise_system ();
 		return -1;
 	}
 	if ((old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
-		nih_error ("Failed to get if the trace is on");
+		log_error ("Failed to get if the trace is on");
 		nih_error_raise_system ();
 		return -1;
 	}
 	if (tracefs_trace_on (NULL) < 0) {
-		nih_error ("Failed to set the trace on");
+		log_error ("Failed to set the trace on");
 		nih_error_raise_system ();
 		return -1;
 	}
@@ -401,7 +401,7 @@ trace (int daemonise,
 	 * a bunch of memory.
 	 */
 	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
-		nih_error ("Failed to restore the buffer size");
+		log_error ("Failed to restore the buffer size");
 		nih_error_raise_system ();
 		return -1;
 	}
@@ -419,7 +419,7 @@ trace (int daemonise,
 				NihError *err;
 
 				err = nih_error_get ();
-				nih_warn ("%s", err->message);
+				log_warn ("%s", err->message);
 				nih_free (err);
 
 				continue;
@@ -430,11 +430,11 @@ trace (int daemonise,
 			 */
 			if (filename_to_replace &&
 			    strcmp (filename_to_replace, filename)) {
-				nih_info ("Skipping %s", filename);
+				log_info ("Skipping %s", filename);
 				continue;
 			}
 		}
-		nih_info ("Writing %s", filename);
+		log_info ("Writing %s", filename);
 
 		/* We only need to apply additional sorting to the
 		 * HDD-optimised packs, the SSD ones can read in random
@@ -452,7 +452,7 @@ trace (int daemonise,
 
 		write_pack (filename, &files[i]);
 
-		if (nih_log_priority < NIH_LOG_MESSAGE)
+		if (log_minimum_severity < UREADAHEAD_LOG_MESSAGE)
 			pack_dump (&files[i], SORT_OPEN);
 	}
 
@@ -937,7 +937,7 @@ read_path_trace  (struct tep_event *event, struct tep_record *record,
 
 	tep_path = tep_get_field_raw(NULL, event, "filename", record, &len, 0);
 	if (! tep_path) {
-		nih_warn ("Field 'filename' not found for event %s", event->name);
+		log_warn ("Field 'filename' not found for event %s", event->name);
 		return 0;
 	}
 
@@ -950,7 +950,7 @@ read_path_trace  (struct tep_event *event, struct tep_record *record,
 	if (path_prefix_filter &&
 		strncmp (path, path_prefix_filter,
 				strlen (path_prefix_filter))) {
-		nih_warn ("Skipping %s due to path prefix filter", path);
+		log_warn ("Skipping %s due to path prefix filter", path);
 		goto out;
 	}
 
@@ -1053,7 +1053,7 @@ trace_add_path (const void *parent,
 	 * the working directory that they were opened from.
 	 */
 	if (pathname[0] != '/') {
-		nih_warn ("%s: %s", pathname, _("Ignored relative path"));
+		log_warn ("%s: %s", pathname, _("Ignored relative path"));
 		return 0;
 	}
 
@@ -1068,7 +1068,7 @@ trace_add_path (const void *parent,
 	 * pack.
 	 */
 	if (strlen (pathname) > PACK_PATH_MAX) {
-		nih_warn ("%s: %s", pathname, _("Ignored far too long path"));
+		log_warn ("%s: %s", pathname, _("Ignored far too long path"));
 		return 0;
 	}
 
@@ -1105,7 +1105,7 @@ trace_add_path (const void *parent,
 		 * PACK_PATH_MAX.
 		 */
 		if (strlen (resolved_pathname) > PACK_PATH_MAX) {
-			nih_warn ("%s: %s", resolved_pathname, _("Ignored far too long path"));
+			log_warn ("%s: %s", resolved_pathname, _("Ignored far too long path"));
 			return 0;
 		}
 
@@ -1127,14 +1127,14 @@ trace_add_path (const void *parent,
 	 */
 	fd = open (pathname, O_RDONLY | O_NOATIME);
 	if (fd < 0) {
-		nih_warn ("%s: %s: %s", pathname,
+		log_warn ("%s: %s: %s", pathname,
 			  _("File vanished or error reading"),
 			  strerror (errno));
 		return -1;
 	}
 
 	if (fstat (fd, &statbuf) < 0) {
-		nih_warn ("%s: %s: %s", pathname,
+		log_warn ("%s: %s: %s", pathname,
 			  _("Error retrieving file stat"),
 			  strerror (errno));
 		close (fd);
@@ -1274,7 +1274,7 @@ trace_file (const void *parent,
 			NihError *err;
 
 			err = nih_error_get ();
-			nih_warn (_("Unable to obtain rotationalness for device %u:%u: %s"),
+			log_warn (_("Unable to obtain rotationalness for device %u:%u: %s"),
 				major (dev), minor (dev), err->message);
 			nih_free (err);
 
@@ -1326,7 +1326,7 @@ trace_add_chunks (const void *parent,
 	/* Map the file into memory */
 	buf = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 	if (buf == MAP_FAILED) {
-		nih_warn ("%s: %s: %s", path->path,
+		log_warn ("%s: %s: %s", path->path,
 			  _("Error mapping into memory"),
 			  strerror (errno));
 		return -1;
@@ -1339,7 +1339,7 @@ trace_add_chunks (const void *parent,
 	memset (vec, 0, num_pages);
 
 	if (mincore (buf, size, vec) < 0) {
-		nih_warn ("%s: %s: %s", path->path,
+		log_warn ("%s: %s: %s", path->path,
 			  _("Error retrieving page cache info"),
 			  strerror (errno));
 		munmap (buf, size);
@@ -1348,7 +1348,7 @@ trace_add_chunks (const void *parent,
 
 	/* Clean up */
 	if (munmap (buf, size) < 0) {
-		nih_warn ("%s: %s: %s", path->path,
+		log_warn ("%s: %s: %s", path->path,
 			  _("Error unmapping from memory"),
 			  strerror (errno));
 		return -1;
@@ -1479,7 +1479,7 @@ trace_add_extents (const void *parent,
 		NihError *err;
 
 		err = nih_error_get ();
-		nih_warn ("%s: %s: %s", path->path,
+		log_warn ("%s: %s: %s", path->path,
 			  _("Error retrieving chunk extents"),
 			  err->message);
 		nih_free (err);
@@ -1575,7 +1575,7 @@ trace_add_groups (const void *parent,
 
 		mean /= num_groups;
 
-		nih_debug ("%zu inode groups, mean %zu inodes per group, %zu hits",
+		log_debug ("%zu inode groups, mean %zu inodes per group, %zu hits",
 			   num_groups, mean, hits);
 
 		ext2fs_close (fs);

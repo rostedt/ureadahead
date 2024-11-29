@@ -48,6 +48,7 @@
 
 #include "pack.h"
 #include "trace.h"
+#include "logging.h"
 
 
 /**
@@ -266,6 +267,15 @@ main (int   argc,
 	if (! args)
 		exit (1);
 
+	/* HACK: Handle the libnih's log setting and copy it to internal logger.
+	 * subject for removal.
+	 */
+	if (nih_log_priority == NIH_LOG_INFO)
+		log_set_minimum_severity(UREADAHEAD_LOG_INFO);
+
+	if (nih_log_priority == NIH_LOG_ERROR)
+		log_set_minimum_severity(UREADAHEAD_LOG_ERROR);
+
 	/* Lookup the filename for the pack based on the path given
 	 * (if any).
 	 */
@@ -282,7 +292,7 @@ main (int   argc,
 			NihError *err;
 
 			err = nih_error_get ();
-			nih_fatal ("%s: %s: %s", args[0] ?: "/",
+			log_fatal ("%s: %s: %s", args[0] ?: "/",
 				   _("Unable to determine pack file name"),
 				   err->message);
 			nih_free (err);
@@ -301,7 +311,7 @@ main (int   argc,
 			/* Read the pack */
 			if (do_readahead (file, daemonise) < 0) {
 				err = nih_error_get ();
-				nih_error ("%s: %s", _("Error while reading"),
+				log_error ("%s: %s", _("Error while reading"),
 					   err->message);
 				nih_free (err);
 				exit (3);
@@ -315,9 +325,9 @@ main (int   argc,
 		 */
 		err = nih_error_get ();
 		if (args[0] || dump_pack) {
-			nih_fatal ("%s: %s", filename, err->message);
+			log_fatal ("%s: %s", filename, err->message);
 		} else {
-			nih_info ("%s: %s", filename, err->message);
+			log_info ("%s: %s", filename, err->message);
 		}
 		nih_free (err);
 
@@ -332,7 +342,7 @@ main (int   argc,
 		NihError *err;
 
 		err = nih_error_get ();
-		nih_error ("%s: %s", _("Error while tracing"), err->message);
+		log_error ("%s: %s", _("Error while tracing"), err->message);
 		nih_free (err);
 
 		exit (5);

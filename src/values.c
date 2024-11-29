@@ -32,11 +32,11 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h> /* for atoi */
 #include <string.h>
 #include <unistd.h>
 
 #include <nih/macros.h>
-#include <nih/logging.h>
 #include <nih/error.h>
 
 #include "values.h"

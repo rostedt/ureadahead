@@ -45,13 +45,13 @@
 #include <nih/macros.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
-#include <nih/logging.h>
 #include <nih/error.h>
 
 #include "pack.h"
 #include "values.h"
 #include "file.h"
 #include "errors.h"
+#include "logging.h"
 
 
 /* From linux/ioprio.h */
@@ -284,31 +284,31 @@ read_pack (const void *parent,
 
 	/* Read and verify the header */
 	if (fread (hdr, 1, 8, fp) < 8) {
-		nih_debug ("Short read of header");
+		log_debug ("Short read of header");
 		goto error;
 	}
 
 	if ((hdr[0] != 'u')
 	    || (hdr[1] != 'r')
 	    || (hdr[2] != 'a')) {
-		nih_debug ("Header format error");
+		log_debug ("Header format error");
 		goto error;
 	}
 
 	if (hdr[3] != 2) {
-		nih_debug ("Pack version error");
+		log_debug ("Pack version error");
 		goto error;
 	}
 
 	file->rotational = (hdr[4] & PACK_ROTATIONAL ? TRUE : FALSE);
 
 	if (fread (&file->dev, sizeof file->dev, 1, fp) < 1) {
-		nih_debug ("Short read of device number");
+		log_debug ("Short read of device number");
 		goto error;
 	}
 
 	if (fread (&created, sizeof created, 1, fp) < 1) {
-		nih_debug ("Short read of creation time");
+		log_debug ("Short read of creation time");
 		goto error;
 	}
 
@@ -322,15 +322,16 @@ read_pack (const void *parent,
 
 	strftime (buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %z",
 		  gmtime (&created));
-	nih_log_message (dump ? NIH_LOG_MESSAGE : NIH_LOG_INFO,
-			 "%s: created %s for %s %d:%d", filename, buf,
-			 file->rotational ? "hdd" : "ssd",
-			 major (file->dev), minor (file->dev));
+
+	log_write (dump ? UREADAHEAD_LOG_MESSAGE : UREADAHEAD_LOG_INFO,
+		   "%s: created %s for %s %d:%d", filename, buf,
+		   file->rotational ? "hdd" : "ssd",
+		   major (file->dev), minor (file->dev));
 
 
 	/* Read in the number of group entries */
 	if (fread (&file->num_groups, sizeof file->num_groups, 1, fp) < 1) {
-		nih_debug ("Short read of number of group entries");
+		log_debug ("Short read of number of group entries");
 		goto error;
 	}
 
@@ -339,13 +340,13 @@ read_pack (const void *parent,
 
 	/* Read in the group entries */
 	if (fread (file->groups, sizeof (int), file->num_groups, fp) < file->num_groups) {
-		nih_debug ("Short read of group entries");
+		log_debug ("Short read of group entries");
 		goto error;
 	}
 
 	/* Read in the number of path entries */
 	if (fread (&file->num_paths, sizeof file->num_paths, 1, fp) < 1) {
-		nih_debug ("Short read of number of path entries");
+		log_debug ("Short read of number of path entries");
 		goto error;
 	}
 
@@ -354,13 +355,13 @@ read_pack (const void *parent,
 
 	/* Read in the path entries */
 	if (fread (file->paths, sizeof (PackPath), file->num_paths, fp) < file->num_paths) {
-		nih_debug ("Short read of path entries");
+		log_debug ("Short read of path entries");
 		goto error;
 	}
 
 	/* Read in the number of block entries */
 	if (fread (&file->num_blocks, sizeof file->num_blocks, 1, fp) < 1) {
-		nih_debug ("Short read of number of block entries");
+		log_debug ("Short read of number of block entries");
 		goto error;
 	}
 
@@ -369,21 +370,21 @@ read_pack (const void *parent,
 
 	/* Read in the block entries */
 	if (fread (file->blocks, sizeof (PackBlock), file->num_blocks, fp) < file->num_blocks) {
-		nih_debug ("Short read of block entries");
+		log_debug ("Short read of block entries");
 		goto error;
 	}
 
-	if ((nih_log_priority <= NIH_LOG_INFO) || dump) {
+	if ((log_minimum_severity <= UREADAHEAD_LOG_INFO) || dump) {
 		off_t bytes;
 
 		bytes = 0;
 		for (size_t i = 0; i < file->num_blocks; i++)
 			bytes += file->blocks[i].length;
 
-		nih_log_message (dump ? NIH_LOG_MESSAGE : NIH_LOG_INFO,
-				 "%zu inode groups, %zu files, %zu blocks (%zu kB)",
-				 file->num_groups, file->num_paths, file->num_blocks,
-				 (size_t)bytes / 1024);
+		log_write (dump ? UREADAHEAD_LOG_MESSAGE : UREADAHEAD_LOG_INFO,
+			   "%zu inode groups, %zu files, %zu blocks (%zu kB)",
+			   file->num_groups, file->num_paths, file->num_blocks,
+			   (size_t)bytes / 1024);
 	}
 
 	/* Done */
@@ -475,14 +476,14 @@ write_pack (const char *filename,
 	if (fwrite (file->blocks, sizeof (PackBlock), file->num_blocks, fp) < file->num_blocks)
 		goto error;
 
-	if (nih_log_priority <= NIH_LOG_INFO) {
+	if (log_minimum_severity <= UREADAHEAD_LOG_INFO) {
 		off_t bytes;
 
 		bytes = 0;
 		for (size_t i = 0; i < file->num_blocks; i++)
 			bytes += file->blocks[i].length;
 
-		nih_info ("%zu inode groups, %zu files, %zu blocks (%zu kB)",
+		log_info ("%zu inode groups, %zu files, %zu blocks (%zu kB)",
 			  file->num_groups, file->num_paths, file->num_blocks,
 			  (size_t)bytes / 1024);
 	}
@@ -520,7 +521,7 @@ print_time (const char *     message,
 		span.tv_nsec += 1000000000;
 	}
 
-	nih_info ("%s: %ld.%03lds", message,
+	log_info ("%s: %ld.%03lds", message,
 		  span.tv_sec, span.tv_nsec / 1000000);
 
 	start->tv_sec = end.tv_sec;
@@ -619,7 +620,7 @@ pack_dump (PackFile * file,
 		char *          ptr;
 
 		if (stat (pack[i].path->path, &statbuf) < 0) {
-			nih_warn ("%s: %s", pack[i].path->path,
+			log_warn ("%s: %s", pack[i].path->path,
 				  strerror (errno));
 			continue;
 		}
@@ -653,32 +654,32 @@ pack_dump (PackFile * file,
 			block_bytes += file->blocks[j].length;
 		}
 
-		nih_message ("%s (%zu kB), %zu blocks (%zu kB)",
+		log_message ("%s (%zu kB), %zu blocks (%zu kB)",
 			     pack[i].path->path, (size_t)statbuf.st_size / 1024,
 			     block_count, (size_t)block_bytes / 1024);
 
 		ptr = buf;
 		while (strlen (ptr) > 74) {
-			nih_message ("  [%.74s]", ptr);
+			log_message ("  [%.74s]", ptr);
 			ptr += 74;
 		}
 
 		if (strlen (ptr))
-			nih_message ("  [%-74s]", ptr);
+			log_message ("  [%-74s]", ptr);
 
-		nih_message ("%s", "");
+		log_message ("%s", "");
 
 		for (size_t j = 0; j < file->num_blocks; j++) {
 			if (file->blocks[j].pathidx != pack[i].idx)
 				continue;
 
-			nih_message ("\t%zu, %zu bytes (at %zu)",
+			log_message ("\t%zu, %zu bytes (at %zu)",
 				     (size_t)file->blocks[j].offset,
 				     (size_t)file->blocks[j].length,
 				     (size_t)file->blocks[j].physical);
 		}
 
-		nih_message ("%s", "");
+		log_message ("%s", "");
 	}
 }
 
@@ -703,7 +704,7 @@ do_readahead (PackFile *file,
 
 	if ((size_t)(nr_open - limit_increase) < file->num_paths) {
 		file->num_paths = nr_open - limit_increase;
-		nih_info ("Truncating to first %zu paths", file->num_paths);
+		log_info ("Truncating to first %zu paths", file->num_paths);
 	}
 
 	/* Adjust our resource limits */
@@ -736,12 +737,12 @@ do_readahead_hdd (PackFile *file,
 	 * disk.
 	 */
 	if (setpriority (PRIO_PROCESS, getpid (), -20))
-		nih_warn ("%s: %s", _("Failed to set CPU priority"),
+		log_warn ("%s: %s", _("Failed to set CPU priority"),
 			  strerror (errno));
 
 	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, getpid (),
 		     IOPRIO_RT_HIGHEST) < 0)
-		nih_warn ("%s: %s", _("Failed to set I/O priority"),
+		log_warn ("%s: %s", _("Failed to set I/O priority"),
 			  strerror (errno));
 
 	clock_gettime (CLOCK_MONOTONIC, &start);
@@ -769,7 +770,7 @@ do_readahead_hdd (PackFile *file,
 	for (size_t i = 0; i < file->num_paths; i++) {
 		fds[i] = open (file->paths[i].path, O_RDONLY | O_NOATIME);
 		if (fds[i] < 0)
-			nih_warn ("%s: %s", file->paths[i].path,
+			log_warn ("%s: %s", file->paths[i].path,
 				  strerror (errno));
 	}
 
@@ -874,7 +875,7 @@ ra_thread (void *ptr)
 
 	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, 0,
 		     IOPRIO_IDLE_LOWEST) < 0)
-		nih_warn ("%s: %s", _("Failed to set I/O priority"),
+		log_warn ("%s: %s", _("Failed to set I/O priority"),
 			  strerror (errno));
 
 	for (;;) {
@@ -896,7 +897,7 @@ ra_thread (void *ptr)
 		fd = open (ctx->file->paths[pathidx].path,
 			   O_RDONLY | O_NOATIME);
 		if (fd < 0) {
-			nih_warn ("%s: %s", ctx->file->paths[pathidx].path,
+			log_warn ("%s: %s", ctx->file->paths[pathidx].path,
 				  strerror (errno));
 			continue;
 		}
