@@ -1113,6 +1113,14 @@ trace_add_path (const void *parent,
 
 		pathname = resolved_pathname;
 
+		/* Prevent resolved_path_name from going above
+		 * PACK_PATH_MAX.
+		 */
+		if (strlen (resolved_pathname) > PACK_PATH_MAX) {
+			nih_warn ("%s: %s", resolved_pathname, _("Ignored far too long path"));
+			return 0;
+		}
+
 		if (! maybe_insert_new_path (path_hash, resolved_pathname))
 			return 0;
 
