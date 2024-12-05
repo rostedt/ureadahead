@@ -55,8 +55,6 @@
 #include <nih/macros.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
-#include <nih/list.h>
-#include <nih/hash.h>
 #include <nih/main.h>
 #include <nih/logging.h>
 #include <nih/error.h>
@@ -1027,34 +1025,6 @@ fix_path (char *pathname)
 }
 
 
-/* Look for given pathname from the hash table,
- * and insert new one if it's not in it yet.
- *
- * @path_hash: Hash table to look for string from.
- * @pathname: path name to look for.
- *
- * Returns TRUE on new insertion (not found).
- * Returns FALSE on duplicate entry.
- */
-static inline int
-maybe_insert_new_path (NihHash *path_hash,
-		       const char *pathname)
-{
-	if (nih_hash_lookup (path_hash, pathname)) {
-		return FALSE;
-	}
-
-	NihListEntry *entry;
-
-	entry = NIH_MUST (nih_list_entry_new (path_hash));
-	entry->str = NIH_MUST (nih_strdup (entry, pathname));
-
-	nih_hash_add (path_hash, &entry->entry);
-
-	return TRUE;
-}
-
-
 static int
 trace_add_path (const void *parent,
 		const char *pathname,
@@ -1062,13 +1032,12 @@ trace_add_path (const void *parent,
 		size_t *    num_files,
 		int         force_ssd_mode)
 {
-	static NihHash *path_hash = NULL;
 	struct stat     statbuf;
 	int             fd;
 	PackFile *      file;
 	PackPath *      path;
-	static NihHash *inode_hash = NULL;
-	nih_local char *inode_key = NULL;
+	static struct dev_inode_data **inode_hash = NULL;
+	static struct path_data **path_hash = NULL;
 
 	/* Used when the file to be included turns out
 	 * to be a symlink.
@@ -1107,14 +1076,14 @@ trace_add_path (const void *parent,
 	 * the table since that would waste pack space (and fds).
 	 */
 	if (! path_hash) {
-		path_hash = nih_hash_string_new (NULL, 2500);
+		path_hash = calloc (HASH_SIZE, sizeof (struct path_data *));
 		assert (path_hash != NULL);
 	}
 
 	/* Try to insert a new path into hash table,
 	 * or abort in case if it already exists (processed).
 	 */
-	if (! maybe_insert_new_path (path_hash, pathname))
+	if (! maybe_insert_path (path_hash, pathname))
 		return 0;
 
 	/* Start checking the file type to see if it can be
@@ -1140,7 +1109,7 @@ trace_add_path (const void *parent,
 			return 0;
 		}
 
-		if (! maybe_insert_new_path (path_hash, resolved_pathname))
+		if (! maybe_insert_path (path_hash, resolved_pathname))
 			return 0;
 
 		/* Update statbuf with the actual information of the file
@@ -1150,9 +1119,6 @@ trace_add_path (const void *parent,
 			return 0;
 	}
 
-	/* Making sure if it is an ordinary file and
-	 * not a fifo or socket.
-	 */
 	if (! S_ISREG (statbuf.st_mode))
 		return 0;
 
@@ -1215,28 +1181,12 @@ trace_add_path (const void *parent,
 	 * read the blocks of an actual file the first time.
 	 */
 	if (! inode_hash) {
-		inode_hash = nih_hash_string_new (NULL, 2500);
+		inode_hash = calloc (HASH_SIZE, sizeof (struct dev_inode_data *));
 		assert (inode_hash != NULL);
 	}
 
-	inode_key = nih_sprintf (NULL, "%llu:%llu",
-				 (unsigned long long)statbuf.st_dev,
-				 (unsigned long long)statbuf.st_ino);
-	assert (inode_key != NULL);
-
-	if (nih_hash_lookup (inode_hash, inode_key)) {
-		close (fd);
+	if (! maybe_insert_dev_inode_pair (inode_hash, statbuf.st_dev, statbuf.st_ino))
 		return 0;
-	} else {
-		NihListEntry *entry;
-
-		entry = nih_list_entry_new (inode_hash);
-		assert (entry != NULL);
-		entry->str = inode_key;
-		nih_ref (entry->str, entry);
-
-		nih_hash_add (inode_hash, &entry->entry);
-	}
 
 	/* There's also no point reading zero byte files, since they
 	 * won't have any blocks (and we can't mmap zero bytes anyway).
