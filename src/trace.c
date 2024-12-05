@@ -55,8 +55,6 @@
 #include <nih/macros.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
-#include <nih/list.h>
-#include <nih/hash.h>
 #include <nih/main.h>
 #include <nih/logging.h>
 #include <nih/error.h>
@@ -186,6 +184,21 @@ struct filemap_tep {
 	struct tep_format_field  *last_index; /* May be NULL */
 };
 
+/* Hash table entry for processed path bookkeeping. */
+struct path_data {
+	struct path_data *next;
+	size_t length;
+	unsigned long hash;
+	char path[PACK_PATH_MAX+1];
+};
+
+/* Hash table entry for processed dev:inode bookkeeping. */
+struct dev_inode_data {
+	struct dev_inode_data *next;
+
+	dev_t dev_id;
+	ino_t inode;
+};
 
 /* Prototypes for static functions */
 static int       read_trace          (const void *parent,
@@ -244,6 +257,10 @@ static struct device_data   *find_device        (struct device_data **device_has
 static void		 add_inodes	(struct device_data **device_hash,
 					 PackFile **files, size_t *num_files,
 					 int force_ssd_mode);
+
+static int maybe_insert_path (struct path_data **path_table, const char *pathname);
+static int maybe_insert_dev_inode_pair (struct dev_inode_data **dev_inode_table,
+					dev_t dev_id, ino_t inode);
 
 static inline off_t
 min (const off_t a, const off_t b)
@@ -1008,34 +1025,6 @@ fix_path (char *pathname)
 }
 
 
-/* Look for given pathname from the hash table,
- * and insert new one if it's not in it yet.
- *
- * @path_hash: Hash table to look for string from.
- * @pathname: path name to look for.
- *
- * Returns TRUE on new insertion (not found).
- * Returns FALSE on duplicate entry.
- */
-static inline int
-maybe_insert_new_path (NihHash *path_hash,
-		       const char *pathname)
-{
-	if (nih_hash_lookup (path_hash, pathname)) {
-		return FALSE;
-	}
-
-	NihListEntry *entry;
-
-	entry = NIH_MUST (nih_list_entry_new (path_hash));
-	entry->str = NIH_MUST (nih_strdup (entry, pathname));
-
-	nih_hash_add (path_hash, &entry->entry);
-
-	return TRUE;
-}
-
-
 static int
 trace_add_path (const void *parent,
 		const char *pathname,
@@ -1043,13 +1032,12 @@ trace_add_path (const void *parent,
 		size_t *    num_files,
 		int         force_ssd_mode)
 {
-	static NihHash *path_hash = NULL;
 	struct stat     statbuf;
 	int             fd;
 	PackFile *      file;
 	PackPath *      path;
-	static NihHash *inode_hash = NULL;
-	nih_local char *inode_key = NULL;
+	static struct dev_inode_data **inode_hash = NULL;
+	static struct path_data **path_hash = NULL;
 
 	/* Used when the file to be included turns out
 	 * to be a symlink.
@@ -1088,14 +1076,14 @@ trace_add_path (const void *parent,
 	 * the table since that would waste pack space (and fds).
 	 */
 	if (! path_hash) {
-		path_hash = nih_hash_string_new (NULL, 2500);
+		path_hash = calloc (HASH_SIZE, sizeof (struct path_data *));
 		assert (path_hash != NULL);
 	}
 
 	/* Try to insert a new path into hash table,
 	 * or abort in case if it already exists (processed).
 	 */
-	if (! maybe_insert_new_path (path_hash, pathname))
+	if (! maybe_insert_path (path_hash, pathname))
 		return 0;
 
 	/* Start checking the file type to see if it can be
@@ -1121,7 +1109,7 @@ trace_add_path (const void *parent,
 			return 0;
 		}
 
-		if (! maybe_insert_new_path (path_hash, resolved_pathname))
+		if (! maybe_insert_path (path_hash, resolved_pathname))
 			return 0;
 
 		/* Update statbuf with the actual information of the file
@@ -1131,9 +1119,6 @@ trace_add_path (const void *parent,
 			return 0;
 	}
 
-	/* Making sure if it is an ordinary file and
-	 * not a fifo or socket.
-	 */
 	if (! S_ISREG (statbuf.st_mode))
 		return 0;
 
@@ -1196,28 +1181,12 @@ trace_add_path (const void *parent,
 	 * read the blocks of an actual file the first time.
 	 */
 	if (! inode_hash) {
-		inode_hash = nih_hash_string_new (NULL, 2500);
+		inode_hash = calloc (HASH_SIZE, sizeof (struct dev_inode_data *));
 		assert (inode_hash != NULL);
 	}
 
-	inode_key = nih_sprintf (NULL, "%llu:%llu",
-				 (unsigned long long)statbuf.st_dev,
-				 (unsigned long long)statbuf.st_ino);
-	assert (inode_key != NULL);
-
-	if (nih_hash_lookup (inode_hash, inode_key)) {
-		close (fd);
+	if (! maybe_insert_dev_inode_pair (inode_hash, statbuf.st_dev, statbuf.st_ino))
 		return 0;
-	} else {
-		NihListEntry *entry;
-
-		entry = nih_list_entry_new (inode_hash);
-		assert (entry != NULL);
-		entry->str = inode_key;
-		nih_ref (entry->str, entry);
-
-		nih_hash_add (inode_hash, &entry->entry);
-	}
 
 	/* There's also no point reading zero byte files, since they
 	 * won't have any blocks (and we can't mmap zero bytes anyway).
@@ -2120,4 +2089,80 @@ static struct device_data *find_device (struct device_data **device_hash,
 	}
 
 	return dev;
+}
+
+static int
+maybe_insert_path (struct path_data **path_table, const char *pathname)
+{
+	assert (pathname != NULL);
+	assert (path_table != NULL);
+
+	/* Simple DJB2 hashing. */
+	size_t i;
+	unsigned long hash = 5381;
+	size_t length = strlen (pathname);
+
+	for (i = 0; i < length; i++)
+		hash = ((hash << 5) + hash) + (unsigned long)pathname[i];
+
+	int key = hash & HASH_MASK;
+
+	struct path_data *data;
+	for (data = path_table[key]; data; data = data->next) {
+		if (data->hash == hash &&
+		    data->length == length &&
+		    strcmp (pathname, data->path) == 0)
+			return 0;
+	}
+
+	/* Path not found. add a new one,
+	 * and insert it to the start of linked list.
+	 */
+	data = calloc (1, sizeof (struct path_data));
+	assert (data != NULL);
+
+	data->hash = hash;
+	data->length = length;
+
+	strncpy (data->path, pathname, PACK_PATH_MAX);
+	data->path[PACK_PATH_MAX] = '\0';
+
+	if (path_table[key])
+		data->next = path_table[key];
+
+	path_table[key] = data;
+
+	return 1;
+}
+
+static int
+maybe_insert_dev_inode_pair (struct dev_inode_data **dev_inode_table, dev_t dev_id, ino_t inode)
+{
+	assert (dev_inode_table != NULL);
+	/* We use inode for more uniquely distributed key
+	 * as opposed to device id.
+	 */
+	int key = inode & HASH_MASK;
+
+	struct dev_inode_data *data;
+	for (data = dev_inode_table[key]; data; data = data->next) {
+		if (data->inode == inode && data->dev_id == dev_id)
+			return 0;
+	}
+
+	/* dev/inode pair not found. add a new one,
+	 * and insert it to the start of linked list.
+	 */
+	data = calloc (1, sizeof (struct dev_inode_data));
+	assert (data != NULL);
+
+	data->dev_id = dev_id;
+	data->inode  = inode;
+
+	if (dev_inode_table[key])
+		data->next = dev_inode_table[key];
+
+	dev_inode_table[key] = data;
+
+	return 1;
 }
