@@ -288,18 +288,6 @@ main (int   argc,
 	if (! force_trace) {
 		NihError *err;
 
-		if (! filename) {
-			NihError *err;
-
-			err = nih_error_get ();
-			log_fatal ("%s: %s: %s", args[0] ?: "/",
-				   _("Unable to determine pack file name"),
-				   err->message);
-			nih_free (err);
-
-			exit (2);
-		}
-
 		/* Read the current pack file */
 		file = read_pack (NULL, filename, dump_pack);
 		if (file) {

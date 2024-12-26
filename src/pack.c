@@ -31,6 +31,7 @@
 #include <sys/resource.h>
 
 #include <time.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <assert.h>
@@ -114,8 +115,11 @@ pack_file_name (const void *parent,
 	/* Stat the path given, if it was a file, just return that as the
 	 * filename.
 	 */
-	if (stat (arg, &statbuf) < 0)
-		nih_return_system_error (NULL);
+	if (stat (arg, &statbuf) < 0) {
+		log_error ("Failed to read stat of file %s: %s",
+			   arg, strerror (errno));
+		return NULL;
+	}
 
 	if (S_ISREG (statbuf.st_mode))
 		return nih_strdup (NULL, arg);
