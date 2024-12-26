@@ -56,7 +56,6 @@
 #include <nih/alloc.h>
 #include <nih/string.h>
 #include <nih/main.h>
-#include <nih/error.h>
 #include <tracefs.h>
 
 #include "trace.h"
@@ -298,6 +297,7 @@ trace (int daemonise,
 	struct timeval      tv;
 	nih_local PackFile *files = NULL;
 	size_t              num_files = 0;
+	int                 err = 0;
 
 	if (! use_existing_trace_events) {
 		bool failed = false;
@@ -311,8 +311,8 @@ trace (int daemonise,
 				if (i < NR_REQUIRED_EVENTS) {
 					failed = true;
 				} else if (failed && i < NR_ALTERNATE_REQUIRED_EVENTS) {
-					log_error ("Failed to enable %s", EVENTS[i][1]);
-					nih_error_raise_system ();
+					log_error ("Failed to enable %s: %s", EVENTS[i][1],
+						   strerror (errno));
 					return -1;
 				}
 				log_debug ("Missing %s tracing: %d", EVENTS[i][1], ret);
@@ -321,23 +321,23 @@ trace (int daemonise,
 	}
 	/* cpu 0 to get the size per core, assuming all cpus have the same size */
 	if ((old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
-		log_error ("Failed to get the buffer size");
-		nih_error_raise_system ();
+		log_error ("Failed to get the buffer size: %s",
+			   strerror (errno));
 		return -1;
 	}
 	if (tracefs_instance_set_buffer_size (NULL, 8192, -1) < 0) {
-		log_error ("Failed to set the buffer size");
-		nih_error_raise_system ();
+		log_error ("Failed to set the buffer size: %s",
+			   strerror (errno));
 		return -1;
 	}
 	if ((old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
-		log_error ("Failed to get if the trace is on");
-		nih_error_raise_system ();
+		log_error ("Failed to get if the trace is on: %s",
+			   strerror (errno));
 		return -1;
 	}
 	if (tracefs_trace_on (NULL) < 0) {
-		log_error ("Failed to set the trace on");
-		nih_error_raise_system ();
+		log_error ("Failed to set the trace on: %s",
+			   strerror (errno));
 		return -1;
 	}
 
@@ -346,7 +346,8 @@ trace (int daemonise,
 
 		pid = fork ();
 		if (pid < 0) {
-			nih_error_raise_system ();
+			log_error ("Failed to fork: %s",
+				   strerror (errno));
 			return -1;
 		} else if (pid > 0) {
 			_exit (0);
@@ -375,7 +376,8 @@ trace (int daemonise,
 
 	/* Restore previous tracing settings */
 	if (old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
-		nih_error_raise_system ();
+		log_error ("Failed to set the trace off: %s",
+			   strerror (errno));
 		return -1;
 	}
 	if (! use_existing_trace_events) {
@@ -401,8 +403,8 @@ trace (int daemonise,
 	 * a bunch of memory.
 	 */
 	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
-		log_error ("Failed to restore the buffer size");
-		nih_error_raise_system ();
+		log_error ("Failed to restore the buffer size: %s",
+			   strerror (errno));
 		return -1;
 	}
 
@@ -416,12 +418,8 @@ trace (int daemonise,
 			filename = pack_file_name_for_device (NULL,
 							      files[i].dev);
 			if (! filename) {
-				NihError *err;
-
-				err = nih_error_get ();
-				log_warn ("%s", err->message);
-				nih_free (err);
-
+				log_warn ("Failed to create filename for device %lu",
+					  files[i].dev);
 				continue;
 			}
 
@@ -450,7 +448,8 @@ trace (int daemonise,
 			trace_sort_paths (files, &files[i]);
 		}
 
-		write_pack (filename, &files[i]);
+		if (write_pack (filename, &files[i]) < 0)
+			log_error ("failed to write a pack file %s", filename);
 
 		if (log_minimum_severity < UREADAHEAD_LOG_MESSAGE)
 			pack_dump (&files[i], SORT_OPEN);
@@ -545,8 +544,11 @@ read_trace (const void *parent,
 	assert (num_files != NULL);
 
 	tep = tracefs_local_events_system (NULL, systems);
-	if (!tep)
-		nih_return_system_error (-1);
+	if (!tep) {
+		log_error ("Failed to get local events system: %s",
+			   strerror (errno));
+		return -1;
+	}
 
 	context.parent = parent;
 
@@ -566,7 +568,8 @@ read_trace (const void *parent,
 	memset (context.device_hash, 0, sizeof(context.device_hash));
 
 	if (tracefs_iterate_raw_events (tep, NULL, NULL, 0, read_trace_cb, &context) < 0) {
-		nih_return_system_error (-1);
+		log_error ("Failed to iterate raw events: %s",
+			   strerror (errno));
 		err = -1;
 		goto out;
 	}
@@ -942,8 +945,10 @@ read_path_trace  (struct tep_event *event, struct tep_record *record,
 	}
 
 	path = strndup(tep_path, len);
-	if (! path)
-		nih_return_system_error(-1);
+	if (! path) {
+		log_error ("strndup failed: %s", strerror (errno));
+		return -1;
+	}
 
 	fix_path (path);
 
@@ -1271,13 +1276,8 @@ trace_file (const void *parent,
 		}
 
 		if (get_value (AT_FDCWD, filename, &rotational) < 0) {
-			NihError *err;
-
-			err = nih_error_get ();
-			log_warn (_("Unable to obtain rotationalness for device %u:%u: %s"),
-				major (dev), minor (dev), err->message);
-			nih_free (err);
-
+			log_warn (_("Unable to obtain rotationalness for device %u:%u"),
+				major (dev), minor (dev));
 			rotational = TRUE;
 		}
 	}
@@ -1425,7 +1425,8 @@ get_fiemap (const void *parent,
 		fiemap->fm_extent_count = 0;
 
 		if (ioctl (fd, FS_IOC_FIEMAP, fiemap) < 0) {
-			nih_error_raise_system ();
+			log_error ("failed to query file extents: %s",
+				   strerror(errno));
 			nih_free (fiemap);
 			return NULL;
 		}
@@ -1445,7 +1446,8 @@ get_fiemap (const void *parent,
 						* fiemap->fm_extent_count));
 
 		if (ioctl (fd, FS_IOC_FIEMAP, fiemap) < 0) {
-			nih_error_raise_system ();
+			log_error ("failed to query file extents: %s",
+				   strerror(errno));
 			nih_free (fiemap);
 			return NULL;
 		}
@@ -1476,14 +1478,7 @@ trace_add_extents (const void *parent,
 	 */
 	fiemap = get_fiemap (NULL, fd, offset, length);
 	if (! fiemap) {
-		NihError *err;
-
-		err = nih_error_get ();
-		log_warn ("%s: %s: %s", path->path,
-			  _("Error retrieving chunk extents"),
-			  err->message);
-		nih_free (err);
-
+		log_warn ("Error retrieving chunk extents for %s", path->path);
 		return -1;
 	}
 

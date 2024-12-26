@@ -44,7 +44,6 @@
 #include <nih/main.h>
 #include <nih/option.h>
 #include <nih/logging.h>
-#include <nih/error.h>
 
 #include "pack.h"
 #include "trace.h"
@@ -286,8 +285,6 @@ main (int   argc,
 	assert (filename != NULL);
 
 	if (! force_trace) {
-		NihError *err;
-
 		/* Read the current pack file */
 		file = read_pack (NULL, filename, dump_pack);
 		if (file) {
@@ -298,10 +295,7 @@ main (int   argc,
 
 			/* Read the pack */
 			if (do_readahead (file, daemonise) < 0) {
-				err = nih_error_get ();
-				log_error ("%s: %s", _("Error while reading"),
-					   err->message);
-				nih_free (err);
+				log_fatal ("Failed to perform readahead. exiting");
 				exit (3);
 			}
 
@@ -311,28 +305,19 @@ main (int   argc,
 		/* Error reading file means we retrace if not given a PATH,
 		 * otherwise we error out.
 		 */
-		err = nih_error_get ();
 		if (args[0] || dump_pack) {
-			log_fatal ("%s: %s", filename, err->message);
-		} else {
-			log_info ("%s: %s", filename, err->message);
-		}
-		nih_free (err);
-
-		if (args[0] || dump_pack)
+			log_fatal ("Pack file required, but couldn't be opened. exiting");
 			exit (4);
+		} else {
+			log_info ("Could not open a pack file, retracing");
+		}
 	}
 
 	/* Trace to generate new pack files */
 	if (trace (daemonise, timeout, filename, pack_file,
 		   path_prefix_filter, &path_prefix, use_existing_trace_events,
 		   force_ssd_mode) < 0) {
-		NihError *err;
-
-		err = nih_error_get ();
-		log_error ("%s: %s", _("Error while tracing"), err->message);
-		nih_free (err);
-
+		log_error ("Error while tracing. aborting");
 		exit (5);
 	}
 

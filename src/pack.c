@@ -46,12 +46,10 @@
 #include <nih/macros.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
-#include <nih/error.h>
 
 #include "pack.h"
 #include "values.h"
 #include "file.h"
-#include "errors.h"
 #include "logging.h"
 
 
@@ -166,8 +164,11 @@ pack_file_name_for_device (const void *parent,
 	char *line;
 
 	fp = fopen ("/proc/self/mountinfo", "r");
-	if (! fp)
-		nih_return_system_error (NULL);
+	if (! fp) {
+		log_error ("Failed to open /proc/self/mountinfo: %s",
+			   strerror (errno));
+		return NULL;
+	}
 
 	while ((line = fgets_alloc (NULL, fp)) != NULL) {
 		char *       saveptr;
@@ -223,7 +224,9 @@ pack_file_name_for_device (const void *parent,
 		/* Done, convert the mountpoint to a pack filename */
 		if (fclose (fp) < 0) {
 			nih_free (line);
-			nih_return_system_error (NULL);
+			log_error ("Failed to close stream of mountinfo: %s",
+				   strerror (errno));
+			return NULL;
 		}
 
 		result = pack_file_name_for_mount (parent, mount);
@@ -231,12 +234,15 @@ pack_file_name_for_device (const void *parent,
 		return result;
 	}
 
-	if (fclose (fp) < 0)
-		nih_return_system_error (NULL);
+	if (fclose (fp) < 0) {
+		log_error ("Failed to close stream of mountinfo: %s",
+			   strerror (errno));
+		return NULL;
+	}
 
 	/* Fell through, can't generate pack file */
-	errno = ENOENT;
-	nih_return_system_error (NULL);
+	log_error ("Cannot create path for pack file: insufficient data");
+	return NULL;
 }
 
 static int
@@ -276,8 +282,11 @@ read_pack (const void *parent,
 
 	/* Open the file, and then allocate the PackFile structure for it. */
 	fp = fopen (filename, "r");
-	if (! fp)
-		nih_return_system_error (NULL);
+	if (! fp) {
+		log_error ("Failed to open file %s: %s", filename,
+			   strerror (errno));
+		return NULL;
+	}
 
 	/* Obvious really... */
 	if (fstat (fileno (fp), &stat) == 0)
@@ -318,7 +327,7 @@ read_pack (const void *parent,
 
 	/* If the file is too old, close and ignore it */
 	if ((! dump) && (created < (time (NULL) - 86400 * 365))) {
-		nih_error_raise (PACK_TOO_OLD, _(PACK_TOO_OLD_STR));
+		log_error ("Pack file %s is too old, cannot be used", filename);
 		nih_free (file);
 		fclose (fp);
 		return NULL;
@@ -393,7 +402,8 @@ read_pack (const void *parent,
 
 	/* Done */
 	if (fclose (fp) < 0) {
-		nih_error_raise_system ();
+		log_error ("Failed to close file stream for %s: %s",
+			   filename, strerror (errno));
 		nih_free (file);
 		return NULL;
 	}
@@ -402,7 +412,7 @@ read_pack (const void *parent,
 
 	return file;
 error:
-	nih_error_raise (PACK_DATA_ERROR, _(PACK_DATA_ERROR_STR));
+	log_error ("Failed to read a pack file: content is corrupted or invalid");
 	nih_free (file);
 	fclose (fp);
 	return NULL;
@@ -424,12 +434,16 @@ write_pack (const char *filename,
 	 * sane mode
 	 */
 	fd = open (filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-	if (fd < 0)
-		nih_return_system_error (-1);
+	if (fd < 0) {
+		log_error ("Failed to open a pack file before writing: %s",
+			   strerror (errno));
+		return -1;
+	}
 
 	fp = fdopen (fd, "w");
 	if (! fp) {
-		nih_error_raise_system ();
+		log_error ("Failed to open stream for writing a pack file: %s",
+			   strerror (errno));
 		close (fd);
 		return -1;
 	}
@@ -500,7 +514,8 @@ write_pack (const char *filename,
 
 	return 0;
 error:
-	nih_error_raise_system ();
+	log_error ("Failed to write a pack file: %s",
+		   strerror (errno));
 	fclose (fp);
 	return -1;
 }
@@ -715,8 +730,11 @@ do_readahead (PackFile *file,
 	nofile.rlim_cur = limit_increase + file->num_paths;
 	nofile.rlim_max = limit_increase + file->num_paths;
 
-	if (setrlimit (RLIMIT_NOFILE, &nofile) < 0)
-		nih_return_system_error (-1);
+	if (setrlimit (RLIMIT_NOFILE, &nofile) < 0) {
+		log_error ("Failed to adjust resource limit: %s",
+			   strerror (errno));
+		return -1;
+	}
 
 	if (file->rotational) {
 		return do_readahead_hdd (file, daemonise);
@@ -846,7 +864,8 @@ do_readahead_ssd (PackFile *file,
 
 		pid = fork ();
 		if (pid < 0) {
-			nih_return_system_error (-1);
+			log_error ("failed to fork: %s", strerror (errno));
+			return -1;
 		} else if (pid > 0) {
 			_exit (0);
 		}

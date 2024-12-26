@@ -29,18 +29,19 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h> /* for atoi */
 #include <string.h>
+#include <stdlib.h> /* for atoi */
 #include <unistd.h>
 
 #include <nih/macros.h>
-#include <nih/error.h>
 
 #include "values.h"
-
+#include "logging.h"
 
 int
 get_value (int         dfd,
@@ -55,12 +56,16 @@ get_value (int         dfd,
 	assert (value != NULL);
 
 	fd = openat (dfd, path, O_RDONLY);
-	if (fd < 0)
-		nih_return_system_error (-1);
+	if (fd < 0) {
+		log_error ("Failed to open %s: %s",
+			   path, strerror (errno));
+		return -1;
+	}
 
 	len = read (fd, buf, sizeof(buf) - 1);
 	if (len < 0) {
-		nih_error_raise_system ();
+		log_error ("failed to read %s: %s",
+			   path, strerror (errno));
 		close (fd);
 		return -1;
 	}
@@ -68,8 +73,11 @@ get_value (int         dfd,
 	buf[len] = '\0';
 	*value = len ? atoi (buf) : 0;
 
-	if (close (fd) < 0)
-		nih_return_system_error (-1);
+	if (close (fd) < 0) {
+		log_error ("Failed to close %s: %s",
+			   path, strerror (errno));
+		return -1;
+	}
 
 	return 0;
 }
@@ -87,13 +95,17 @@ set_value (int         dfd,
 	assert (path != NULL);
 
 	fd = openat (dfd, path, O_RDWR);
-	if (fd < 0)
-		nih_return_system_error (-1);
+	if (fd < 0) {
+		log_error ("Failed to open %s: %s",
+			   path, strerror (errno));
+		return -1;
+	}
 
 	if (oldvalue) {
 		len = read (fd, buf, sizeof(buf) - 1);
 		if (len < 0) {
-			nih_error_raise_system ();
+			log_error ("failed to read %s: %s",
+				   path, strerror (errno));
 			close (fd);
 			return -1;
 		}
@@ -108,15 +120,19 @@ set_value (int         dfd,
 
 	len = write (fd, buf, strlen (buf));
 	if (len < 0) {
-		nih_error_raise_system ();
+		log_error ("failed to write %s: %s",
+			   path, strerror (errno));
 		close (fd);
 		return -1;
 	}
 
 	assert (len > 0);
 
-	if (close (fd) < 0)
-		nih_return_system_error (-1);
+	if (close (fd) < 0) {
+		log_error ("failed to close %s: %s",
+			   path, strerror (errno));
+		return -1;
+	}
 
 	return 0;
 }
