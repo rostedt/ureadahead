@@ -27,6 +27,17 @@
 # include <config.h>
 #endif /* HAVE_CONFIG_H */
 
+#ifndef PACKAGE_NAME
+# define PACKAGE_NAME    "ureadahead"
+#endif /* PACKAGE_NAME */
+
+#ifndef PACKAGE_VERSION
+# define PACKAGE_VERSION "0.100.2"
+#endif /* PACKAGE_VERSION */
+
+#ifndef PACKAGE_STRING
+# define PACKAGE_STRING  "ureadahead 0.100.2"
+#endif /* PACKAGE_STRING */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -34,16 +45,13 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <getopt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <nih/macros.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
-#include <nih/main.h>
-#include <nih/option.h>
-#include <nih/logging.h>
 
 #include "pack.h"
 #include "trace.h"
@@ -53,18 +61,18 @@
 /**
  * daemonise:
  *
- * Set to TRUE if we should become a daemon, rather than just running
+ * Set to 1 if we should become a daemon, rather than just running
  * in the foreground.
  **/
-static int daemonise = FALSE;
+static int daemonise = 0;
 
 /**
  * force_trace:
  *
- * Set to TRUE if we should re-trace no matter what, the existing pack
+ * Set to 1 if we should re-trace no matter what, the existing pack
  * file will not be read.
  **/
-static int force_trace = FALSE;
+static int force_trace = 0;
 
 /**
  * timeout:
@@ -77,9 +85,9 @@ static int timeout = 0;
 /**
  * dump_pack:
  *
- * Set to TRUE to only dump the current pack file.
+ * Set to 1 to only dump the current pack file.
  **/
-static int dump_pack = FALSE;
+static int dump_pack = 0;
 
 /**
  * sort_pack:
@@ -114,12 +122,12 @@ static char *path_prefix_filter = NULL;
 /**
  * use_existing_trace_events:
  *
- * Set to TRUE if trace events (tracing/events/fs/) used to build the pack file
+ * Set to 1 if trace events (tracing/events/fs/) used to build the pack file
  * are enabled and disabled outside of ureadahead. Needed if trace events access
  * is never allowed (while setting buffer size and tracing on/off is allowed) by
  * the OS's SELinux policy.
  */
-static int use_existing_trace_events = FALSE;
+static int use_existing_trace_events = 0;
 
 /**
  * force_ssd_mode:
@@ -127,160 +135,237 @@ static int use_existing_trace_events = FALSE;
  * Querying sysfs to detect whether disk is rotational does not work for virtual
  * devices in vm, this will write pack header with rotational field set to 0.
  */
-static int force_ssd_mode = FALSE;
+static int force_ssd_mode = 0;
 
 static int
-path_prefix_option (NihOption  *option,
-                    const char *arg)
+handle_path_prefix_option (const char *arg)
 {
-	PathPrefixOption *value;
 	struct stat st;
 	dev_t st_dev;
-
-	assert (option != NULL);
-	assert (option->value != NULL);
 	assert (arg != NULL);
 
-	value = (PathPrefixOption *)option->value;
-
 	if (strlen (arg) >= PATH_MAX) {
-		goto error;
+		log_fatal("Illegal argument:"
+			  " --path-prefix='%s' exceeds allowed path size",
+			  arg);
+		return -1;
 	}
 
 	if (lstat (arg, &st) < 0 || !S_ISDIR (st.st_mode)) {
-		goto error;
+		log_fatal("Illegal argument:"
+			  " --path-prefix='%s' is not a directory",
+			  arg);
+		return -1;
 	}
 
-	value->st_dev = st.st_dev;
-	strcpy (value->prefix, arg);
+	path_prefix.st_dev = st.st_dev;
+	strcpy (path_prefix.prefix, arg);
 
-	return 0;
-
-error:
-	fprintf (stderr, _("%s: illegal argument: %s\n"),
-		 program_name, arg);
-	nih_main_suggest_help ();
-	return -1;
-}
-
-static int
-dup_string_handler (NihOption   *option,
-		    const char  *arg)
-{
-	assert (option != NULL);
-	assert (option->value != NULL);
-	assert (arg != NULL);
-
-	char **value = (char **)option->value;
-	*value = nih_strdup (NULL, arg);
-	assert (*value != NULL);
 	return 0;
 }
 
 static int
-sort_option (NihOption  *option,
-	     const char *arg)
+handle_sort_option (const char *arg)
 {
-	SortOption *value;
-
-	assert (option != NULL);
-	assert (option->value != NULL);
 	assert (arg != NULL);
-
-	value = (SortOption *)option->value;
-
-	if (! strcmp (arg, "open")) {
-		*value = SORT_OPEN;
-	} else if (! strcmp (arg, "path")) {
-		*value = SORT_PATH;
-	} else if (! strcmp (arg, "disk")) {
-		*value = SORT_DISK;
-	} else if (! strcmp (arg, "size")) {
-		*value = SORT_SIZE;
+	if (strcmp (arg, "open") == 0) {
+		sort_pack = SORT_OPEN;
+	} else if (strcmp (arg, "path") == 0) {
+		sort_pack = SORT_PATH;
+	} else if (strcmp (arg, "disk") == 0) {
+		sort_pack = SORT_DISK;
+	} else if (strcmp (arg, "size") == 0) {
+		sort_pack = SORT_SIZE;
 	} else {
-		fprintf (stderr, _("%s: illegal argument: %s\n"),
-			 program_name, arg);
-		nih_main_suggest_help ();
+		log_fatal ("Illegal argument:"
+			   " --sort needs to be one of 'open', 'path', 'disk', 'size'");
 		return -1;
 	}
 
 	return 0;
 }
 
+enum OptionFlag {
+	OPTION_TIMEOUT			= 't',
+	OPTION_SORT			= 's',
+	OPTION_PATH_PREFIX		= 'p',
+	OPTION_PACK_FILE		= 'f',
+	OPTION_PATH_PREFIX_FILTER	= 'i',
+	OPTION_HELP			= 'h',
+	OPTION_VERSION			= 'V',
+	OPTION_VERBOSE			= 'v',
+	OPTION_QUIET			= 'q',
+	OPTION_DEBUG			= 'd',
+};
 
 /**
  * options:
  *
  * Command-line options accepted by this tool.
  **/
-static NihOption options[] = {
-	{ 0, "daemon", N_("detach and run in the background"),
-	  NULL, NULL, &daemonise, NULL },
-	{ 0, "force-trace", N_("ignore existing pack and force retracing"),
-	  NULL, NULL, &force_trace, NULL },
-	{ 0, "timeout", N_("maximum time to trace [default: until terminated]"),
-	  NULL, "SECONDS", &timeout, nih_option_int },
-	{ 0, "dump", N_("dump the current pack file"),
-	  NULL, NULL, &dump_pack, NULL },
-	{ 0, "sort", N_("how to sort the pack file when dumping [default: open]"),
-	  NULL, "SORT", &sort_pack, sort_option },
-	{ 0, "path-prefix", N_("pathname to prepend for files on the device"),
-	  NULL, "PREFIX", &path_prefix, path_prefix_option },
-	{ 0, "path-prefix-filter",
-	  N_("Path prefix that retained files during tracing must start with"),
-	  NULL, "PREFIX_FILTER", &path_prefix_filter, dup_string_handler },
-	{ 0, "pack-file", N_("Path of the pack file to use"),
-	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
-	{ 0, "use-existing-trace-events", N_("do not enable or disable trace events"),
-	  NULL, NULL, &use_existing_trace_events, NULL },
-	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
-	  NULL, NULL, &force_ssd_mode, NULL },
+static struct option options[] = {
+	/*
+	 * boolean options
+	 */
+	{ "daemon", no_argument, &daemonise, 1 },
+	{ "force-trace", no_argument, &force_trace, 1 },
+	{ "dump", no_argument, &dump_pack, 1 },
+	{ "use-existing-trace-events", no_argument, &use_existing_trace_events, 1 },
+	{ "force-ssd-mode", no_argument, &force_ssd_mode, 1 },
 
-	NIH_OPTION_LAST
+	/*
+	 * boolean flags that has a special handling
+	 */
+	{ "help", no_argument, NULL, OPTION_HELP },
+	{ "version", no_argument, NULL, OPTION_VERSION },
+	{ "verbose", no_argument, NULL, OPTION_VERBOSE }, /* allows -v */
+	{ "quiet", no_argument, NULL, OPTION_QUIET }, /* allows -q */
+	{ "debug", no_argument, NULL, OPTION_DEBUG },
+
+	/* options with parameters */
+	{ "timeout", required_argument, NULL, OPTION_TIMEOUT },
+	{ "sort", required_argument, NULL, OPTION_SORT },
+	{ "path-prefix", required_argument, NULL, OPTION_PATH_PREFIX },
+	{ "path-prefix-filter", required_argument, NULL, OPTION_PATH_PREFIX_FILTER },
+	{ "pack-file", required_argument, NULL, OPTION_PACK_FILE },
+	{ NULL, 0, NULL, 0 }
 };
 
+static void
+print_usage () {
+	printf ("Usage: %s [OPTION]... [PATH]\n", PACKAGE_NAME);
+	printf ("Read required files in advance.\n\n");
 
-int
-main (int   argc,
-      char *argv[])
-{
-	char **             args;
-	nih_local char *    filename = NULL;
-	nih_local PackFile *file = NULL;
+	printf ("Options:\n"
+		"  --daemon\n"
+		"    Detach and run in background\n"
+		"  --force-trace\n"
+		"    Ignore existing pack file and force retracing\n"
+		"  --timeout=SECONDS\n"
+		"    Maximum duration of tracing (default: unset; continue until interrupt)\n"
+		"  --dump\n"
+		"    Dump the specified pack file and exit\n"
+		"  --sort=(open|path|disk|size)\n"
+		"    Specify how to sort the pack file when dumping (default: open)\n"
+		"  --path-prefix=PREFIX\n"
+		"    Pathname to prepend for files on the device\n"
+		"  --path-prefix-filter=PREFIX_FILTER\n"
+		"    Path prefix that retained files during tracing must start with\n"
+		"  --pack-file=PACK_FILE\n"
+		"    Path of the pack file to use. takes precedence oveer [PATH]\n"
+		"  --use-existing-trace-events\n"
+		"    Do not enable/disable trace events\n"
+		"  --force-ssd-mode\n"
+		"    Force SSD setting in pack file during tracing\n"
+		"  --help\n"
+		"    Display this help and exit\n"
+		"  --version\n"
+		"    Output version information and exit\n"
+		"  -v --verbose\n"
+		"    Output informational messages\n"
+		"  -q --quiet\n"
+		"    Suppress non-error messages\n"
+		"  --debug\n"
+		"    Outputs debug messages\n"
+		"\n"
+	);
 
-	nih_main_init (argv[0]);
-
-	nih_option_set_usage (_("[PATH]"));
-	nih_option_set_synopsis (_("Read required files in advance"));
-	nih_option_set_help (
-		_("PATH should be the location of a mounted filesystem "
+	printf ("PATH should be the location of a mounted filesystem "
 		  "for which files should be read.  If not given, the root "
 		  "filesystem is assumed.\n"
 		  "\n"
 		  "If PATH is not given, and no readahead information exists "
 		  "for the root filesystem (or it is old), tracing is "
 		  "performed instead to generate the information for the "
-		  "next boot."));
+		  "next boot.\n");
 
-	args = nih_option_parser (NULL, argc, argv, options, FALSE);
-	if (! args)
+	printf ("Report bugs to <ubuntu-devel@lists.ubuntu.com> \n");
+}
+
+static void
+print_version () {
+	printf ("%s\n\n", PACKAGE_STRING);
+	printf ("This is free software; see the source for copying conditions. "
+		"There is NO warranty; not even for MERCHANTABILITY or "
+		"FITNESS FOR A PARTICULAR PURPOSE."
+		"\n");
+}
+
+int parse_options (int argc, char **argv) {
+	int output = 0;
+
+	for (;;) {
+		output = getopt_long (argc, argv, "vq", options, NULL);
+		/* Done */
+		if (output == -1)
+			return optind;
+
+		switch (output) {
+		case 0: /* self-handling options, ignore */
+			break;
+		case '?': /* unknown option */
+			return -1;
+		case OPTION_TIMEOUT:
+			timeout = atoi (optarg);
+			break;
+		case OPTION_SORT:
+			if (handle_sort_option (optarg) != 0)
+				return -1;
+			break;
+		case OPTION_PATH_PREFIX:
+			if (handle_path_prefix_option (optarg) != 0)
+				return -1;
+			break;
+		case OPTION_PATH_PREFIX_FILTER:
+			if (path_prefix_filter) /* already set */
+				return -1;
+			path_prefix_filter = strdup (optarg);
+			break;
+		case OPTION_PACK_FILE:
+			if (pack_file)  /* already set */
+				return -1;
+			pack_file = strdup (optarg);
+			break;
+		case OPTION_VERBOSE:
+			log_set_minimum_severity (UREADAHEAD_LOG_INFO);
+			break;
+		case OPTION_QUIET:
+			log_set_minimum_severity (UREADAHEAD_LOG_ERROR);
+			break;
+		case OPTION_DEBUG:
+			log_set_minimum_severity (UREADAHEAD_LOG_DEBUG);
+			break;
+		case OPTION_HELP:
+			print_usage ();
+			exit (0);
+		case OPTION_VERSION:
+			print_version ();
+			exit (0);
+		default:
+			__builtin_unreachable ();
+		}
+	}
+
+	__builtin_unreachable ();
+}
+
+int
+main (int   argc,
+      char *argv[])
+{
+	nih_local char *    filename = NULL;
+	nih_local PackFile *file = NULL;
+
+	int path_position = 0;
+	if ((path_position = parse_options (argc, argv)) == -1)
 		exit (1);
-
-	/* HACK: Handle the libnih's log setting and copy it to internal logger.
-	 * subject for removal.
-	 */
-	if (nih_log_priority == NIH_LOG_INFO)
-		log_set_minimum_severity(UREADAHEAD_LOG_INFO);
-
-	if (nih_log_priority == NIH_LOG_ERROR)
-		log_set_minimum_severity(UREADAHEAD_LOG_ERROR);
 
 	/* Lookup the filename for the pack based on the path given
 	 * (if any).
 	 */
 	filename = pack_file
 		? nih_strdup (NULL, pack_file)
-		: pack_file_name (NULL, args[0]);
+		: pack_file_name (NULL, argv[path_position]);
 
 	assert (filename != NULL);
 
@@ -305,7 +390,7 @@ main (int   argc,
 		/* Error reading file means we retrace if not given a PATH,
 		 * otherwise we error out.
 		 */
-		if (args[0] || dump_pack) {
+		if (argv[path_position] || dump_pack) {
 			log_fatal ("Pack file required, but couldn't be opened. exiting");
 			exit (4);
 		} else {
@@ -320,6 +405,9 @@ main (int   argc,
 		log_error ("Error while tracing. aborting");
 		exit (5);
 	}
+
+	free (pack_file);
+	free (path_prefix_filter);
 
 	return 0;
 }
