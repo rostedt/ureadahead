@@ -50,9 +50,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <nih/alloc.h>
-#include <nih/string.h>
-
 #include "pack.h"
 #include "trace.h"
 #include "logging.h"
@@ -353,8 +350,8 @@ int
 main (int   argc,
       char *argv[])
 {
-	nih_local char *    filename = NULL;
-	nih_local PackFile *file = NULL;
+	char *    filename = NULL;
+	PackFile *file = NULL;
 
 	int path_position = 0;
 	if ((path_position = parse_options (argc, argv)) == -1)
@@ -364,14 +361,14 @@ main (int   argc,
 	 * (if any).
 	 */
 	filename = pack_file
-		? nih_strdup (NULL, pack_file)
-		: pack_file_name (NULL, argv[path_position]);
+		? strdup (pack_file)
+		: pack_file_name (argv[path_position]);
 
 	assert (filename != NULL);
 
 	if (! force_trace) {
 		/* Read the current pack file */
-		file = read_pack (NULL, filename, dump_pack);
+		file = read_pack (filename, dump_pack);
 		if (file) {
 			if (dump_pack) {
 				pack_dump (file, sort_pack);
@@ -406,6 +403,11 @@ main (int   argc,
 		exit (5);
 	}
 
+	if (file)
+		free_pack_content (file);
+
+	free (filename);
+	free (file);
 	free (pack_file);
 	free (path_prefix_filter);
 

@@ -22,8 +22,6 @@
 #include <limits.h>
 #include <sys/types.h>
 
-#include <nih/list.h>
-
 
 
 typedef struct path_prefix_option {

@@ -21,7 +21,6 @@ ureadahead_SOURCES = \
 	trace.c trace.h \
 	pack.c pack.h \
 	values.c values.h \
-	file.c file.h \
 	logging.c logging.h
 ureadahead_LDADD = \
 	-lrt \

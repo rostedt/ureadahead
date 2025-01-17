@@ -22,7 +22,6 @@
 #include <sys/types.h>
 
 #include <limits.h>
-#include <nih/list.h>
 
 
 /**
@@ -70,13 +69,14 @@ typedef enum sort_option {
 } SortOption;
 
 
-char *    pack_file_name            (const void *parent, const char *arg);
-char *    pack_file_name_for_mount  (const void *parent, const char *mount);
-char *    pack_file_name_for_device (const void *parent, dev_t dev);
+char *    pack_file_name            (const char *arg);
+char *    pack_file_name_for_mount  (const char *mount);
+char *    pack_file_name_for_device (dev_t dev);
 
-PackFile *read_pack                 (const void *parent, const char *filename,
+PackFile *read_pack                 (const char *filename,
 				     int dump);
 int       write_pack                (const char *filename, PackFile *file);
+void	  free_pack_content	    (PackFile *file);
 
 void      pack_dump                 (PackFile *file, SortOption sort);
 

@@ -44,12 +44,9 @@
 #include <ext2fs.h>
 
 #include <nih/macros.h>
-#include <nih/alloc.h>
-#include <nih/string.h>
 
 #include "pack.h"
 #include "values.h"
-#include "file.h"
 #include "logging.h"
 
 
@@ -101,14 +98,13 @@ static void *ra_thread           (void *ptr);
 
 
 char *
-pack_file_name (const void *parent,
-		const char *arg)
+pack_file_name (const char *arg)
 {
 	struct stat statbuf;
 
 	/* If we're not given an argument, fall back to the root pack */
 	if (! arg)
-		return nih_strdup (NULL, PATH_PACKDIR "/pack");
+		return strdup (PATH_PACKDIR "/pack");
 
 	/* Stat the path given, if it was a file, just return that as the
 	 * filename.
@@ -120,17 +116,17 @@ pack_file_name (const void *parent,
 	}
 
 	if (S_ISREG (statbuf.st_mode))
-		return nih_strdup (NULL, arg);
+		return strdup (arg);
 
 	/* Otherwise treat it as a mountpoint name */
-	return pack_file_name_for_mount (parent, arg);
+	return pack_file_name_for_mount (arg);
 }
 
 char *
-pack_file_name_for_mount (const void *parent,
-			  const char *mount)
+pack_file_name_for_mount (const char *mount)
 {
 	char *file;
+	int written = 0;
 
 	assert (mount != NULL);
 
@@ -140,15 +136,14 @@ pack_file_name_for_mount (const void *parent,
 	if (mount[0] == '/')
 		mount++;
 	if (mount[0] == '\0')
-		return nih_strdup (NULL, PATH_PACKDIR "/pack");
+		return strdup (PATH_PACKDIR "/pack");
 
 	/* Prepend the mount point to the extension, and replace extra /s
 	 * with periods.
 	 */
-	file = nih_sprintf (parent, "%s/%s.pack",
+	written = asprintf (&file, "%s/%s.pack",
 			    PATH_PACKDIR, mount);
-	assert (file != NULL);
-
+	assert (written != -1);
 	for (char *ptr = file + strlen (PATH_PACKDIR) + 1; *ptr; ptr++)
 		if (*ptr == '/')
 			*ptr = '.';
@@ -157,11 +152,12 @@ pack_file_name_for_mount (const void *parent,
 }
 
 char *
-pack_file_name_for_device (const void *parent,
-			   dev_t       dev)
+pack_file_name_for_device (dev_t dev)
 {
 	FILE *fp;
-	char *line;
+	char *line = NULL;
+	size_t n_line = 0;
+	ssize_t bytes_read = 0;
 
 	fp = fopen ("/proc/self/mountinfo", "r");
 	if (! fp) {
@@ -170,7 +166,7 @@ pack_file_name_for_device (const void *parent,
 		return NULL;
 	}
 
-	while ((line = fgets_alloc (NULL, fp)) != NULL) {
+	while((bytes_read = getline (&line, &n_line, fp)) != -1) {
 		char *       saveptr;
 		char *       ptr;
 		char *       device;
@@ -180,60 +176,54 @@ pack_file_name_for_device (const void *parent,
 		struct stat  statbuf;
 		char *       result;
 
+		/* Eliminate the last linebreak if exists. */
+		char *end = strrchr (line, '\n');
+		if (end)
+			*end = '\0';
+
 		/* mount ID */
 		ptr = strtok_r (line, " \t\n", &saveptr);
-		if (! ptr) {
-			nih_free (line);
+		if (! ptr)
 			continue;
-		}
 
 		/* parent ID */
 		ptr = strtok_r (NULL, " \t\n", &saveptr);
-		if (! ptr) {
-			nih_free (line);
+		if (! ptr)
 			continue;
-		}
 
 		/* major:minor */
 		device = strtok_r (NULL, " \t\n", &saveptr);
-		if (! ptr) {
-			nih_free (line);
+		if (! device)
 			continue;
-		}
 
 		/* root */
 		ptr = strtok_r (NULL, " \t\n", &saveptr);
-		if (! ptr) {
-			nih_free (line);
+		if (! ptr)
 			continue;
-		}
 
 		/* mount point */
 		mount = strtok_r (NULL, " \t\n", &saveptr);
-		if (! mount) {
-			nih_free (line);
+		if (! mount)
 			continue;
-		}
 
 		/* Check whether this is the right device */
-		if (stat (mount, &statbuf) || statbuf.st_dev != dev) {
-			nih_free (line);
+		if (stat (mount, &statbuf) || statbuf.st_dev != dev)
 			continue;
-		}
 
 		/* Done, convert the mountpoint to a pack filename */
 		if (fclose (fp) < 0) {
-			nih_free (line);
+			free (line);
 			log_error ("Failed to close stream of mountinfo: %s",
 				   strerror (errno));
 			return NULL;
 		}
 
-		result = pack_file_name_for_mount (parent, mount);
-		nih_free (line);
+		result = pack_file_name_for_mount (mount);
+		free (line);
 		return result;
 	}
 
+	free (line);
 	if (fclose (fp) < 0) {
 		log_error ("Failed to close stream of mountinfo: %s",
 			   strerror (errno));
@@ -263,9 +253,16 @@ load_pages_in_core (int   fd,
 	return 0;
 }
 
+void
+free_pack_content (PackFile *file)
+{
+	free (file->groups);
+	free (file->paths);
+	free (file->blocks);
+}
+
 PackFile *
-read_pack (const void *parent,
-	   const char *filename,
+read_pack (const char *filename,
 	   int         dump)
 {
 	struct timespec start;
@@ -277,7 +274,6 @@ read_pack (const void *parent,
 	char            buf[80];
 
 	assert (filename != NULL);
-
 	clock_gettime (CLOCK_MONOTONIC, &start);
 
 	/* Open the file, and then allocate the PackFile structure for it. */
@@ -292,7 +288,7 @@ read_pack (const void *parent,
 	if (fstat (fileno (fp), &stat) == 0)
 		load_pages_in_core (fileno (fp), 0, stat.st_size);
 
-	file = nih_new (parent, PackFile);
+	file = calloc (1, sizeof (PackFile));
 	assert (file != NULL);
 
 	/* Read and verify the header */
@@ -328,7 +324,7 @@ read_pack (const void *parent,
 	/* If the file is too old, close and ignore it */
 	if ((! dump) && (created < (time (NULL) - 86400 * 365))) {
 		log_error ("Pack file %s is too old, cannot be used", filename);
-		nih_free (file);
+		free (file);
 		fclose (fp);
 		return NULL;
 	}
@@ -348,7 +344,7 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->groups = nih_alloc (file, sizeof (int) * file->num_groups);
+	file->groups = malloc (sizeof (int) * file->num_groups);
 	assert (file->groups != NULL);
 
 	/* Read in the group entries */
@@ -363,7 +359,7 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->paths = nih_alloc (file, sizeof (PackPath) * file->num_paths);
+	file->paths = malloc (sizeof (PackPath) * file->num_paths);
 	assert (file->paths != NULL);
 
 	/* Read in the path entries */
@@ -378,7 +374,7 @@ read_pack (const void *parent,
 		goto error;
 	}
 
-	file->blocks = nih_alloc (file, sizeof (PackBlock) * file->num_blocks);
+	file->blocks = malloc (sizeof (PackBlock) * file->num_blocks);
 	assert (file->blocks != NULL);
 
 	/* Read in the block entries */
@@ -404,16 +400,19 @@ read_pack (const void *parent,
 	if (fclose (fp) < 0) {
 		log_error ("Failed to close file stream for %s: %s",
 			   filename, strerror (errno));
-		nih_free (file);
+		free_pack_content (file);
+		free (file);
 		return NULL;
 	}
 
 	print_time ("Read pack", &start);
 
 	return file;
+
 error:
 	log_error ("Failed to read a pack file: content is corrupted or invalid");
-	nih_free (file);
+	free_pack_content (file);
+	free (file);
 	fclose (fp);
 	return NULL;
 }
@@ -580,16 +579,15 @@ void
 pack_dump (PackFile * file,
 	   SortOption sort)
 {
-	nih_local struct pack_sort *pack = NULL;
-	int                         page_size;
+	struct pack_sort *pack = NULL;
+	int               page_size;
 
 	assert (file != NULL);
 
 	page_size = sysconf (_SC_PAGESIZE);
 
 	/* Sort the pack file before we dump it */
-	pack = nih_alloc (NULL, (sizeof (struct pack_sort)
-				 * file->num_paths));
+	pack = malloc (sizeof (struct pack_sort) * file->num_paths);
 	assert (pack != NULL);
 
 	for (size_t i = 0; i < file->num_paths; i++) {
@@ -631,12 +629,12 @@ pack_dump (PackFile * file,
 
 	/* Iterated the sorted pack */
 	for (size_t i = 0; i < file->num_paths; i++) {
-		struct stat     statbuf;
-		off_t           num_pages;
-		size_t          block_count;
-		off_t           block_bytes;
-		nih_local char *buf = NULL;
-		char *          ptr;
+		struct stat statbuf;
+		off_t       num_pages;
+		size_t      block_count;
+		off_t       block_bytes;
+		char *      buf = NULL;
+		char *      ptr;
 
 		if (stat (pack[i].path->path, &statbuf) < 0) {
 			log_warn ("%s: %s", pack[i].path->path,
@@ -648,7 +646,7 @@ pack_dump (PackFile * file,
 			     ? (statbuf.st_size - 1) / page_size + 1
 			     : 0);
 
-		buf = nih_alloc (NULL, num_pages + 1);
+		buf = malloc (num_pages + 1);
 		assert (buf != NULL);
 		memset (buf, '.', num_pages);
 		buf[num_pages] = '\0';
@@ -686,6 +684,7 @@ pack_dump (PackFile * file,
 		if (strlen (ptr))
 			log_message ("  [%-74s]", ptr);
 
+		free (buf);
 		log_message ("%s", "");
 
 		for (size_t j = 0; j < file->num_blocks; j++) {
@@ -700,6 +699,8 @@ pack_dump (PackFile * file,
 
 		log_message ("%s", "");
 	}
+
+	free (pack);
 }
 
 
@@ -750,7 +751,7 @@ do_readahead_hdd (PackFile *file,
 	struct timespec start;
 	const char *    devname;
 	ext2_filsys     fs = NULL;
-	nih_local int * fds = NULL;
+	int *           fds = NULL;
 
 	assert (file != NULL);
 
@@ -787,7 +788,7 @@ do_readahead_hdd (PackFile *file,
 	print_time ("Preload ext2fs inodes", &start);
 
 	/* Open all of the files */
-	fds = nih_alloc (NULL, sizeof (int) * file->num_paths);
+	fds = malloc (sizeof (int) * file->num_paths);
 	assert (fds != NULL);
 	for (size_t i = 0; i < file->num_paths; i++) {
 		fds[i] = open (file->paths[i].path, O_RDONLY | O_NOATIME);
@@ -812,6 +813,7 @@ do_readahead_hdd (PackFile *file,
 				    file->blocks[i].length);
 	}
 
+	free (fds);
 	print_time ("Readahead", &start);
 
 	return 0;
@@ -875,16 +877,15 @@ do_readahead_ssd (PackFile *file,
 
 	ctx.file = file;
 	ctx.idx = 0;
-	ctx.got = nih_alloc (NULL, sizeof (int) * file->num_paths);
+	ctx.got = calloc (file->num_paths, sizeof (int));
 	assert (ctx.got != NULL);
-	memset (ctx.got, 0, sizeof (int) * file->num_paths);
 
 	for (int t = 0; t < NUM_THREADS; t++)
 		pthread_create (&thread[t], NULL, ra_thread, &ctx);
 	for (int t = 0; t < NUM_THREADS; t++)
 		pthread_join (thread[t], NULL);
 
-	nih_free (ctx.got);
+	free (ctx.got);
 
 	print_time ("Readahead", &start);
 
