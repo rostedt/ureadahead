@@ -50,13 +50,13 @@ void log_write (enum LogSeverity severity, const char *format, ...)
 		written = fprintf (stderr, "[%s] ureadahead: ", severity_str);
 		fp = stderr;
 
-		assert (written > 0);
+		assert (written >= 0);
 	}
 
 	va_start (va, format);
 	written = vfprintf (fp, format, va);
 	va_end (va);
-	assert (written > 0);
+	assert (written >= 0);
 
 	fputc ('\n', fp);
 }
