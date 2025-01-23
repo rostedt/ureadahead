@@ -43,8 +43,6 @@
 #include <blkid.h>
 #include <ext2fs.h>
 
-#include <nih/macros.h>
-
 #include "pack.h"
 #include "values.h"
 #include "logging.h"
@@ -309,7 +307,7 @@ read_pack (const char *filename,
 		goto error;
 	}
 
-	file->rotational = (hdr[4] & PACK_ROTATIONAL ? TRUE : FALSE);
+	file->rotational = !!(hdr[4] & PACK_ROTATIONAL);
 
 	if (fread (&file->dev, sizeof file->dev, 1, fp) < 1) {
 		log_debug ("Short read of device number");
@@ -760,12 +758,12 @@ do_readahead_hdd (PackFile *file,
 	 * disk.
 	 */
 	if (setpriority (PRIO_PROCESS, getpid (), -20))
-		log_warn ("%s: %s", _("Failed to set CPU priority"),
+		log_warn ("Failed to set CPU priority: %s",
 			  strerror (errno));
 
 	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, getpid (),
 		     IOPRIO_RT_HIGHEST) < 0)
-		log_warn ("%s: %s", _("Failed to set I/O priority"),
+		log_warn ("Failed to set I/O priority: %s",
 			  strerror (errno));
 
 	clock_gettime (CLOCK_MONOTONIC, &start);
@@ -899,7 +897,7 @@ ra_thread (void *ptr)
 
 	if (syscall (__NR_ioprio_set, IOPRIO_WHO_PROCESS, 0,
 		     IOPRIO_IDLE_LOWEST) < 0)
-		log_warn ("%s: %s", _("Failed to set I/O priority"),
+		log_warn ("Failed to set I/O priority: %s",
 			  strerror (errno));
 
 	for (;;) {
