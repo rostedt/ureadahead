@@ -1,7 +1,6 @@
 ## Process this file with automake to produce Makefile.in
 
 AM_CFLAGS = \
-	$(NIH_CFLAGS) \
 	$(BLKID_CFLAGS) \
 	$(EXT2FS_CFLAGS) \
 	$(TRACEFS_CFLAGS) \
@@ -24,7 +23,6 @@ ureadahead_SOURCES = \
 	logging.c logging.h
 ureadahead_LDADD = \
 	-lrt \
-	$(NIH_LIBS) \
 	$(BLKID_LIBS) \
 	$(EXT2FS_LIBS) \
 	$(LTLIBINTL) \

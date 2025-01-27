@@ -15,16 +15,12 @@ AM_MAINTAINER_MODE([enable])
 LT_PREREQ(2.2.4)
 LT_INIT
 
-AM_GNU_GETTEXT_VERSION([0.17])
-AM_GNU_GETTEXT()
-
 # Checks for programs.
 AC_PROG_CC
 AM_PROG_CC_C_O
 PKG_PROG_PKG_CONFIG
 
 # Checks for libraries.
-PKG_CHECK_MODULES([NIH], [libnih >= 1.0.0])
 PKG_CHECK_MODULES([BLKID], [blkid >= 2.16])
 PKG_CHECK_MODULES([EXT2FS], [ext2fs >= 1.41])
 PKG_CHECK_MODULES([TRACEFS], [libtracefs >= 1.6])
@@ -38,14 +34,6 @@ AC_SYS_LARGEFILE
 
 # Checks for library functions.
 
-# Other checks
-NIH_COMPILER_WARNINGS
-NIH_COMPILER_OPTIMISATIONS
-NIH_COMPILER_COVERAGE
-
-NIH_LINKER_OPTIMISATIONS
-
-
-AC_CONFIG_FILES([ Makefile intl/Makefile src/Makefile po/Makefile.in ])
+AC_CONFIG_FILES([ Makefile src/Makefile ])
 AC_CONFIG_HEADERS([config.h])
 AC_OUTPUT
