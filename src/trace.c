@@ -265,41 +265,31 @@ max (const off_t a, const off_t b)
 	return a > b ? a : b;
 }
 
+/* Globals for handling trace. */
+static int                 g_old_events_enabled[NR_EVENTS] = {};
+static int                 g_old_tracing_enabled = 0;
+static int                 g_old_buffer_size_kb = 0;
+static struct sigaction    g_old_sigterm;
+static struct sigaction    g_old_sigint;
+
 static void
 sig_interrupt (int signum)
 {
 }
 
 int
-trace (int daemonise,
-       int timeout,
-       const char *filename_to_replace,
-       const char *pack_file,
-       const char *path_prefix_filter,
-       const PathPrefixOption *path_prefix,
-       int use_existing_trace_events,
-       int force_ssd_mode)
+trace_begin (int daemonise, int use_existing_trace_events)
 {
-	int               old_events_enabled[NR_EVENTS] = {};
-	int               old_tracing_enabled = 0;
-	int               old_buffer_size_kb = 0;
-	struct sigaction  act;
-	struct sigaction  old_sigterm;
-	struct sigaction  old_sigint;
-	struct timeval    tv;
-	/* malloc'ed by read_trace, need free */
-	PackFile *        files = NULL;
-	size_t            num_files = 0;
-	int               err = 0;
+	struct sigaction signal_to_stop;
 
 	if (! use_existing_trace_events) {
 		bool failed = false;
-
 		for (int i = 0; i < NR_EVENTS; i++) {
 			int ret;
 			enum tracefs_enable_state old_state = tracefs_event_is_enabled (NULL, EVENTS[i][0], EVENTS[i][1]);
-			old_events_enabled[i] = (old_state == TRACEFS_ALL_ENABLED || old_state == TRACEFS_SOME_ENABLED);
+			g_old_events_enabled[i] = (old_state == TRACEFS_ALL_ENABLED || old_state == TRACEFS_SOME_ENABLED);
 			ret = tracefs_event_enable (NULL, EVENTS[i][0], EVENTS[i][1]);
+
 			if (ret < 0) {
 				if (i < NR_REQUIRED_EVENTS) {
 					failed = true;
@@ -312,8 +302,9 @@ trace (int daemonise,
 			}
 		}
 	}
+
 	/* cpu 0 to get the size per core, assuming all cpus have the same size */
-	if ((old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
+	if ((g_old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
 		log_error ("Failed to get the buffer size: %s",
 			   strerror (errno));
 		return -1;
@@ -323,7 +314,7 @@ trace (int daemonise,
 			   strerror (errno));
 		return -1;
 	}
-	if ((old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
+	if ((g_old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
 		log_error ("Failed to get if the trace is on: %s",
 			   strerror (errno));
 		return -1;
@@ -348,34 +339,57 @@ trace (int daemonise,
 	}
 
 	/* Sleep until we get signals */
-	act.sa_handler = sig_interrupt;
-	sigemptyset (&act.sa_mask);
-	act.sa_flags = 0;
+	signal_to_stop.sa_handler = sig_interrupt;
+	sigemptyset (&signal_to_stop.sa_mask);
+	signal_to_stop.sa_flags = 0;
 
-	sigaction (SIGTERM, &act, &old_sigterm);
-	sigaction (SIGINT, &act, &old_sigint);
+	sigaction (SIGTERM, &signal_to_stop, &g_old_sigterm);
+	sigaction (SIGINT, &signal_to_stop, &g_old_sigint);
 
-	if (timeout) {
-		tv.tv_sec = timeout;
-		tv.tv_usec = 0;
+	return 0;
+}
 
-		select (0, NULL, NULL, NULL, &tv);
+
+void
+signal_wait (int timeout)
+{
+	struct timeval wait_time;
+
+	if (timeout > 0) {
+		wait_time.tv_sec = timeout;
+		wait_time.tv_usec = 0;
+
+		select (0, NULL, NULL, NULL, &wait_time);
 	} else {
 		pause ();
 	}
+}
 
-	sigaction (SIGTERM, &old_sigterm, NULL);
-	sigaction (SIGINT, &old_sigint, NULL);
+int
+trace_process_events (const char *filename_to_replace,
+		      const char *pack_file, /* Nullable */
+		      const char *path_prefix_filter, /* Nullable */
+		      const PathPrefixOption *path_prefix,
+		      int use_existing_trace_events,
+		      int force_ssd_mode)
+{
+	size_t num_files = 0;
+	/* malloc'ed by read_trace, need free */
+	PackFile *files = NULL;
+
+	sigaction (SIGTERM, &g_old_sigterm, NULL);
+	sigaction (SIGINT, &g_old_sigint, NULL);
 
 	/* Restore previous tracing settings */
-	if (old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
+	if (g_old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
 		log_error ("Failed to set the trace off: %s",
 			   strerror (errno));
 		return -1;
 	}
+
 	if (! use_existing_trace_events) {
 		for (int i = 0; i < NR_EVENTS; i++) {
-			if (old_events_enabled[i] > 0)
+			if (g_old_events_enabled[i] > 0)
 				continue;
 			tracefs_event_disable (NULL,
 					       EVENTS[i][0], EVENTS[i][1]);
@@ -395,7 +409,7 @@ trace (int daemonise,
 	 * Restore the trace buffer size (which has just been read) and free
 	 * a bunch of memory.
 	 */
-	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
+	if (tracefs_instance_set_buffer_size (NULL, g_old_buffer_size_kb, -1) < 0) {
 		log_error ("Failed to restore the buffer size: %s",
 			   strerror (errno));
 		free (files);

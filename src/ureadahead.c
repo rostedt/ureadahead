@@ -366,6 +366,14 @@ main (int   argc,
 
 	assert (filename != NULL);
 
+	/* Attempts to setup and begin a trace. */
+	if (! dump_pack) {
+		if (trace_begin (daemonise, use_existing_trace_events) < 0) {
+			log_fatal ("Failed to enable tracepoints for recording. exiting");
+			exit (6);
+		}
+	}
+
 	if (! force_trace) {
 		/* Read the current pack file */
 		file = read_pack (filename, dump_pack);
@@ -381,26 +389,33 @@ main (int   argc,
 				exit (3);
 			}
 
-			exit (0);
-		}
-
-		/* Error reading file means we retrace if not given a PATH,
-		 * otherwise we error out.
-		 */
-		if (argv[path_position] || dump_pack) {
-			log_fatal ("Pack file required, but couldn't be opened. exiting");
-			exit (4);
+			log_info ("Completed readahead step.");
 		} else {
-			log_info ("Could not open a pack file, retracing");
+			/* Error reading file means we retrace if not given a PATH,
+			 * otherwise we error out.
+			 */
+			if (argv[path_position] || dump_pack) {
+				log_fatal ("Pack file required, but couldn't be opened. exiting");
+				exit (4);
+			} else {
+				log_info ("Could not open a pack file, retracing");
+			}
 		}
 	}
 
-	/* Trace to generate new pack files */
-	if (trace (daemonise, timeout, filename, pack_file,
-		   path_prefix_filter, &path_prefix, use_existing_trace_events,
-		   force_ssd_mode) < 0) {
-		log_error ("Error while tracing. aborting");
-		exit (5);
+	/* wait until the signal said ureadahead to stop, or
+	 * certain amount of time has elapsed from the point of the setup call.
+	 */
+	if (! dump_pack) {
+		signal_wait (timeout);
+
+		/* process gathered trace. */
+		if (trace_process_events (filename, pack_file, path_prefix_filter,
+					  &path_prefix, use_existing_trace_events,
+					  force_ssd_mode) < 0) {
+			log_error ("Failed to process trace events, exiting.");
+			exit (7);
+		}
 	}
 
 	if (file)

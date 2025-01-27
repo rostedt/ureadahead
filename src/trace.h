@@ -29,12 +29,15 @@ typedef struct path_prefix_option {
         char prefix[PATH_MAX];
 } PathPrefixOption;
 
-int trace (int daemonise, int timeout,
-           const char *filename_to_replace,
-           const char *pack_file,  /* May be null */
-           const char *path_prefix_filter,  /* May be null */
-           const PathPrefixOption *path_prefix,
-           int use_existing_trace_events,
-           int force_ssd_mode);
+int trace_begin (int daemonise, int use_existing_trace_events);
+
+void signal_wait (int timeout);
+
+int trace_process_events (const char *filename_to_replace,
+			  const char *pack_file, /* Nullable */
+			  const char *path_prefix_filter, /* Nullable */
+			  const PathPrefixOption *path_prefix,
+			  int use_existing_trace_events,
+			  int force_ssd_mode);
 
 #endif /* UREADAHEAD_TRACE_H */

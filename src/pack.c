@@ -813,9 +813,18 @@ do_readahead_hdd (PackFile *file,
 				    file->blocks[i].length);
 	}
 
+
+	/* Close fds to avoid "too many open files" error that can trigger
+	 * later in the tracing phase.
+	 */
+	for (size_t i = 0; i < file->num_paths; i++) {
+		if (fds[i] < 0)
+			continue;
+		close(fds[i]);
+	}
+
 	free (fds);
 	print_time ("Readahead", &start);
-
 	return 0;
 }
 
@@ -932,6 +941,11 @@ ra_thread (void *ptr)
 					    ctx->file->blocks[i].length);
 		} while ((++i < ctx->file->num_blocks)
 			 && (ctx->file->blocks[i].pathidx == pathidx));
+
+		/* Close fds to avoid "too many open files" error that can trigger
+		 * later in the tracing phase.
+		 */
+		close(fd);
 	}
 
 	return NULL;
