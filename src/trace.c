@@ -26,7 +26,6 @@
 #define _ATFILE_SOURCE
 
 
-#include <sys/select.h>
 #include <sys/mount.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
@@ -230,23 +229,11 @@ max (const off_t a, const off_t b)
 	return a > b ? a : b;
 }
 
-static void
-sig_interrupt (int signum)
-{
-}
-
-static struct sigaction  old_sigterm;
-static struct sigaction  old_sigint;
-
 int
 trace_begin (struct trace_context *ctx,
 	     int daemonise,
-	     int use_existing_trace_events,
-	     int timeout)
+	     int use_existing_trace_events)
 {
-	struct sigaction  act;
-	struct timeval    tv;
-
 	if (! use_existing_trace_events) {
 		bool failed = false;
 
@@ -302,23 +289,6 @@ trace_begin (struct trace_context *ctx,
 		}
 	}
 
-	/* Sleep until we get signals */
-	act.sa_handler = sig_interrupt;
-	sigemptyset (&act.sa_mask);
-	act.sa_flags = 0;
-
-	sigaction (SIGTERM, &act, &old_sigterm);
-	sigaction (SIGINT, &act, &old_sigint);
-
-	if (timeout) {
-		tv.tv_sec = timeout;
-		tv.tv_usec = 0;
-
-		select (0, NULL, NULL, NULL, &tv);
-	} else {
-		pause ();
-	}
-
 	return 0;
 }
 
@@ -334,9 +304,6 @@ trace_process_events (struct trace_context *ctx,
 	/* malloc'ed by read_trace, need free */
 	PackFile *files = NULL;
 	size_t    num_files = 0;
-
-	sigaction (SIGTERM, &old_sigterm, NULL);
-	sigaction (SIGINT, &old_sigint, NULL);
 
 	/* Restore previous tracing settings */
 	if (ctx->old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {

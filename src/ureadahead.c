@@ -42,6 +42,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/select.h>
 
 #include <stdio.h>
 #include <assert.h>
@@ -346,6 +347,40 @@ int parse_options (int argc, char **argv) {
 	__builtin_unreachable ();
 }
 
+static void
+sig_interrupt (int signum)
+{
+}
+
+static void
+await_for_signal (int timeout)
+{
+	struct sigaction act;
+	struct timeval tv;
+	struct sigaction old_sigterm;
+	struct sigaction old_sigint;
+
+	/* Sleep until we get signals */
+	act.sa_handler = sig_interrupt;
+	sigemptyset (&act.sa_mask);
+	act.sa_flags = 0;
+
+	sigaction (SIGTERM, &act, &old_sigterm);
+	sigaction (SIGINT, &act, &old_sigint);
+
+	if (timeout) {
+		tv.tv_sec = timeout;
+		tv.tv_usec = 0;
+
+		select (0, NULL, NULL, NULL, &tv);
+	} else {
+		pause ();
+	}
+
+	sigaction (SIGTERM, &old_sigterm, NULL);
+	sigaction (SIGINT, &old_sigint, NULL);
+}
+
 int
 main (int   argc,
       char *argv[])
@@ -398,11 +433,12 @@ main (int   argc,
 	}
 
 	/* Trace to generate new pack files */
-	if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events,
-			 timeout) < 0) {
+	if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
 		log_fatal ("Failed to enable tracepoints for recording. exiting");
 		exit (6);
 	}
+
+	await_for_signal (timeout);
 
 	if (trace_process_events (&trace_ctx, filename, pack_file,
 				  path_prefix_filter,  &path_prefix,

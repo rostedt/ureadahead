@@ -90,8 +90,7 @@ struct trace_context {
 
 int trace_begin (struct trace_context *ctx,
 		 int daemonise,
-		 int use_existing_trace_events,
-		 int timeout);
+		 int use_existing_trace_events);
 
 int trace_process_events (struct trace_context *ctx,
 			  const char *filename_to_replace,
