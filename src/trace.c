@@ -235,25 +235,17 @@ sig_interrupt (int signum)
 {
 }
 
+static struct sigaction  old_sigterm;
+static struct sigaction  old_sigint;
+
 int
-trace (struct trace_context *ctx,
-       int daemonise,
-       int timeout,
-       const char *filename_to_replace,
-       const char *pack_file,
-       const char *path_prefix_filter,
-       const PathPrefixOption *path_prefix,
-       int use_existing_trace_events,
-       int force_ssd_mode)
+trace_begin (struct trace_context *ctx,
+	     int daemonise,
+	     int use_existing_trace_events,
+	     int timeout)
 {
 	struct sigaction  act;
-	struct sigaction  old_sigterm;
-	struct sigaction  old_sigint;
 	struct timeval    tv;
-	/* malloc'ed by read_trace, need free */
-	PackFile *        files = NULL;
-	size_t            num_files = 0;
-	int               err = 0;
 
 	if (! use_existing_trace_events) {
 		bool failed = false;
@@ -326,6 +318,22 @@ trace (struct trace_context *ctx,
 	} else {
 		pause ();
 	}
+
+	return 0;
+}
+
+int
+trace_process_events (struct trace_context *ctx,
+		      const char *filename_to_replace,
+		      const char *pack_file, /* Nullable */
+		      const char *path_prefix_filter, /* Nullable */
+		      const PathPrefixOption *path_prefix,
+		      int use_existing_trace_events,
+		      int force_ssd_mode)
+{
+	/* malloc'ed by read_trace, need free */
+	PackFile *files = NULL;
+	size_t    num_files = 0;
 
 	sigaction (SIGTERM, &old_sigterm, NULL);
 	sigaction (SIGINT, &old_sigint, NULL);

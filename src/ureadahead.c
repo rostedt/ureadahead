@@ -398,11 +398,18 @@ main (int   argc,
 	}
 
 	/* Trace to generate new pack files */
-	if (trace (&trace_ctx, daemonise, timeout, filename, pack_file,
-		   path_prefix_filter, &path_prefix, use_existing_trace_events,
-		   force_ssd_mode) < 0) {
-		log_error ("Error while tracing. aborting");
-		exit (5);
+	if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events,
+			 timeout) < 0) {
+		log_fatal ("Failed to enable tracepoints for recording. exiting");
+		exit (6);
+	}
+
+	if (trace_process_events (&trace_ctx, filename, pack_file,
+				  path_prefix_filter,  &path_prefix,
+				  use_existing_trace_events,
+				  force_ssd_mode) < 0) {
+		log_error ("Failed to process trace events, exiting.");
+		exit (7);
 	}
 
 	if (file)

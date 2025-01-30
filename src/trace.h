@@ -88,13 +88,17 @@ struct trace_context {
 	int old_buffer_size_kb;
 };
 
-int trace (struct trace_context *ctx,
-           int daemonise, int timeout,
-           const char *filename_to_replace,
-           const char *pack_file,  /* May be null */
-           const char *path_prefix_filter,  /* May be null */
-           const PathPrefixOption *path_prefix,
-           int use_existing_trace_events,
-           int force_ssd_mode);
+int trace_begin (struct trace_context *ctx,
+		 int daemonise,
+		 int use_existing_trace_events,
+		 int timeout);
+
+int trace_process_events (struct trace_context *ctx,
+			  const char *filename_to_replace,
+			  const char *pack_file, /* Nullable */
+			  const char *path_prefix_filter, /* Nullable */
+			  const PathPrefixOption *path_prefix,
+			  int use_existing_trace_events,
+			  int force_ssd_mode);
 
 #endif /* UREADAHEAD_TRACE_H */
