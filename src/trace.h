@@ -82,7 +82,14 @@ typedef struct path_prefix_option {
         char prefix[PATH_MAX];
 } PathPrefixOption;
 
-int trace (int daemonise, int timeout,
+struct trace_context {
+	int old_events_enabled[NR_EVENTS];
+	int old_tracing_enabled;
+	int old_buffer_size_kb;
+};
+
+int trace (struct trace_context *ctx,
+           int daemonise, int timeout,
            const char *filename_to_replace,
            const char *pack_file,  /* May be null */
            const char *path_prefix_filter,  /* May be null */

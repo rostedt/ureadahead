@@ -366,6 +366,8 @@ main (int   argc,
 
 	assert (filename != NULL);
 
+	struct trace_context trace_ctx;
+
 	if (! force_trace) {
 		/* Read the current pack file */
 		file = read_pack (filename, dump_pack);
@@ -396,7 +398,7 @@ main (int   argc,
 	}
 
 	/* Trace to generate new pack files */
-	if (trace (daemonise, timeout, filename, pack_file,
+	if (trace (&trace_ctx, daemonise, timeout, filename, pack_file,
 		   path_prefix_filter, &path_prefix, use_existing_trace_events,
 		   force_ssd_mode) < 0) {
 		log_error ("Error while tracing. aborting");

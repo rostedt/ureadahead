@@ -236,7 +236,8 @@ sig_interrupt (int signum)
 }
 
 int
-trace (int daemonise,
+trace (struct trace_context *ctx,
+       int daemonise,
        int timeout,
        const char *filename_to_replace,
        const char *pack_file,
@@ -245,9 +246,6 @@ trace (int daemonise,
        int use_existing_trace_events,
        int force_ssd_mode)
 {
-	int               old_events_enabled[NR_EVENTS] = {};
-	int               old_tracing_enabled = 0;
-	int               old_buffer_size_kb = 0;
 	struct sigaction  act;
 	struct sigaction  old_sigterm;
 	struct sigaction  old_sigint;
@@ -263,7 +261,7 @@ trace (int daemonise,
 		for (int i = 0; i < NR_EVENTS; i++) {
 			int ret;
 			enum tracefs_enable_state old_state = tracefs_event_is_enabled (NULL, EVENTS[i][0], EVENTS[i][1]);
-			old_events_enabled[i] = (old_state == TRACEFS_ALL_ENABLED || old_state == TRACEFS_SOME_ENABLED);
+			ctx->old_events_enabled[i] = (old_state == TRACEFS_ALL_ENABLED || old_state == TRACEFS_SOME_ENABLED);
 			ret = tracefs_event_enable (NULL, EVENTS[i][0], EVENTS[i][1]);
 			if (ret < 0) {
 				if (i < NR_REQUIRED_EVENTS) {
@@ -278,7 +276,7 @@ trace (int daemonise,
 		}
 	}
 	/* cpu 0 to get the size per core, assuming all cpus have the same size */
-	if ((old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
+	if ((ctx->old_buffer_size_kb = tracefs_instance_get_buffer_size (NULL, 0)) < 0) {
 		log_error ("Failed to get the buffer size: %s",
 			   strerror (errno));
 		return -1;
@@ -288,7 +286,7 @@ trace (int daemonise,
 			   strerror (errno));
 		return -1;
 	}
-	if ((old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
+	if ((ctx->old_tracing_enabled = tracefs_trace_is_on (NULL)) < 0) {
 		log_error ("Failed to get if the trace is on: %s",
 			   strerror (errno));
 		return -1;
@@ -333,14 +331,14 @@ trace (int daemonise,
 	sigaction (SIGINT, &old_sigint, NULL);
 
 	/* Restore previous tracing settings */
-	if (old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
+	if (ctx->old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
 		log_error ("Failed to set the trace off: %s",
 			   strerror (errno));
 		return -1;
 	}
 	if (! use_existing_trace_events) {
 		for (int i = 0; i < NR_EVENTS; i++) {
-			if (old_events_enabled[i] > 0)
+			if (ctx->old_events_enabled[i] > 0)
 				continue;
 			tracefs_event_disable (NULL,
 					       EVENTS[i][0], EVENTS[i][1]);
@@ -360,7 +358,7 @@ trace (int daemonise,
 	 * Restore the trace buffer size (which has just been read) and free
 	 * a bunch of memory.
 	 */
-	if (tracefs_instance_set_buffer_size (NULL, old_buffer_size_kb, -1) < 0) {
+	if (tracefs_instance_set_buffer_size (NULL, ctx->old_buffer_size_kb, -1) < 0) {
 		log_error ("Failed to restore the buffer size: %s",
 			   strerror (errno));
 		free (files);
