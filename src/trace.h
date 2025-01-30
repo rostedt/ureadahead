@@ -54,8 +54,27 @@ static const char *EVENTS[][2] = {
 	/* optional events follow */
 	{FS_SYSTEM, "uselib"}};
 
+/**
+ * NR_REQUIRED_EVENTS:
+ *
+ * Number of required events for ureadahead to function.
+ * NOTE: make sure to match the number with the content of EVENTS above.
+ **/
 #define NR_REQUIRED_EVENTS 2
+
+/**
+ * NR_ALTERNATE_REQUIRED_EVENTS:
+ *
+ * Number of required events for ureadahead to achieve full potential.
+ * NOTE: make sure to match the number with the content of EVENTS above.
+ **/
 #define NR_ALTERNATE_REQUIRED_EVENTS (2 + 3)
+
+/**
+ * NR_EVENTS:
+ *
+ * Number of total events.
+ **/
 #define NR_EVENTS (sizeof (EVENTS) / sizeof (EVENTS[0]))
 
 typedef struct path_prefix_option {
