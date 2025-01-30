@@ -23,6 +23,40 @@
 #include <sys/types.h>
 
 
+/**
+ * FS_SYSTEM
+ *
+ * "fs" subsystem of the tracefs.
+ **/
+#define FS_SYSTEM "fs"
+
+/**
+ * FILEMAP_SYSTEM
+ *
+ * "filemap" subsystem of the tracefs.
+ **/
+#define FILEMAP_SYSTEM	"filemap"
+
+/**
+ * EVENTS:
+ *
+ * TraceFS events to enable.
+ *
+ **/
+static const char *EVENTS[][2] = {
+	/* required events for trace to work */
+	{FS_SYSTEM, "do_sys_open"},
+	{FS_SYSTEM, "open_exec"},
+	/* The below events can also work */
+	{FILEMAP_SYSTEM, "mm_filemap_fault"},
+	{FILEMAP_SYSTEM, "mm_filemap_get_pages"},
+	{FILEMAP_SYSTEM, "mm_filemap_map_pages"},
+	/* optional events follow */
+	{FS_SYSTEM, "uselib"}};
+
+#define NR_REQUIRED_EVENTS 2
+#define NR_ALTERNATE_REQUIRED_EVENTS (2 + 3)
+#define NR_EVENTS (sizeof (EVENTS) / sizeof (EVENTS[0]))
 
 typedef struct path_prefix_option {
         dev_t st_dev;
