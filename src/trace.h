@@ -92,6 +92,9 @@ int trace_begin (struct trace_context *ctx,
 		 int daemonise,
 		 int use_existing_trace_events);
 
+void trace_cancel (struct trace_context *ctx,
+		   int use_existing_trace_events);
+
 int trace_process_events (struct trace_context *ctx,
 			  const char *filename_to_replace,
 			  const char *pack_file, /* Nullable */

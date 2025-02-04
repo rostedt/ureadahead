@@ -442,6 +442,7 @@ main (int   argc,
 		if (file) {
 			if (do_readahead (file, daemonise) < 0) {
 				log_fatal ("Failed to perform readahead. exiting");
+				trace_cancel (&trace_ctx, use_existing_trace_events);
 				exit (3);
 			}
 		}

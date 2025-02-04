@@ -292,6 +292,26 @@ trace_begin (struct trace_context *ctx,
 	return 0;
 }
 
+void
+trace_cancel (struct trace_context *ctx,
+	      int use_existing_trace_events)
+{
+	/* Force-stop and restore every configuration. */
+	if (ctx->old_tracing_enabled == 0)
+		tracefs_trace_off (NULL);
+
+	if (! use_existing_trace_events) {
+		for (int i = 0; i < NR_EVENTS; i++) {
+			if (ctx->old_events_enabled[i] > 0)
+				continue;
+			tracefs_event_disable (NULL,
+					       EVENTS[i][0], EVENTS[i][1]);
+		}
+	}
+
+	tracefs_instance_set_buffer_size (NULL, ctx->old_buffer_size_kb, -1);
+}
+
 int
 trace_process_events (struct trace_context *ctx,
 		      const char *filename_to_replace,
