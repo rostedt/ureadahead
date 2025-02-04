@@ -239,10 +239,12 @@ print_usage () {
 		"    Detach and run in background\n"
 		"  --force-trace\n"
 		"    Ignore existing pack file and force retracing\n"
+		"    Mutually exclusive with --dump\n"
 		"  --timeout=SECONDS\n"
 		"    Maximum duration of tracing (default: unset; continue until interrupt)\n"
 		"  --dump\n"
 		"    Dump the specified pack file and exit\n"
+		"    Mutually exclusive with --force-trace\n"
 		"  --sort=(open|path|disk|size)\n"
 		"    Specify how to sort the pack file when dumping (default: open)\n"
 		"  --path-prefix=PREFIX\n"
@@ -392,6 +394,11 @@ main (int   argc,
 	if ((path_position = parse_options (argc, argv)) == -1)
 		exit (1);
 
+	if (dump_pack && force_trace) {
+		log_fatal ("--dump and --force-trace are mutually exclusive");
+		exit (1);
+	}
+
 	/* Lookup the filename for the pack based on the path given
 	 * (if any).
 	 */
@@ -403,49 +410,51 @@ main (int   argc,
 
 	struct trace_context trace_ctx;
 
-	if (! force_trace) {
-		/* Read the current pack file */
+	if (force_trace) {
+		if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
+			log_fatal ("Failed to enable tracepoints for recording. exiting");
+			exit (6);
+		}
+		await_for_signal (timeout);
+		if (trace_process_events (&trace_ctx, filename, pack_file,
+					  path_prefix_filter,  &path_prefix,
+					  use_existing_trace_events,
+					  force_ssd_mode) < 0) {
+			log_error ("Failed to process trace events, exiting.");
+			exit (7);
+		}
+	} else if (dump_pack) {
 		file = read_pack (filename, dump_pack);
-		if (file) {
-			if (dump_pack) {
-				pack_dump (file, sort_pack);
-				exit (0);
-			}
+		if (! file) {
+			log_fatal ("Pack file required, but couldn't be opened. exiting");
+			exit (4);
+		}
+		pack_dump (file, sort_pack);
+	} else {
+		/* Open the file and do readahead if it exists, otherwise
+		 * begin tracing and output a pack file.
+		 */
+		file = read_pack (filename, dump_pack);
 
-			/* Read the pack */
+		if (file) {
 			if (do_readahead (file, daemonise) < 0) {
 				log_fatal ("Failed to perform readahead. exiting");
 				exit (3);
 			}
-
-			exit (0);
-		}
-
-		/* Error reading file means we retrace if not given a PATH,
-		 * otherwise we error out.
-		 */
-		if (argv[path_position] || dump_pack) {
-			log_fatal ("Pack file required, but couldn't be opened. exiting");
-			exit (4);
 		} else {
-			log_info ("Could not open a pack file, retracing");
+			if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
+				log_fatal ("Failed to enable tracepoints for recording. exiting");
+				exit (6);
+			}
+			await_for_signal (timeout);
+			if (trace_process_events (&trace_ctx, filename, pack_file,
+						  path_prefix_filter,  &path_prefix,
+						  use_existing_trace_events,
+						  force_ssd_mode) < 0) {
+				log_error ("Failed to process trace events, exiting.");
+				exit (7);
+			}
 		}
-	}
-
-	/* Trace to generate new pack files */
-	if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
-		log_fatal ("Failed to enable tracepoints for recording. exiting");
-		exit (6);
-	}
-
-	await_for_signal (timeout);
-
-	if (trace_process_events (&trace_ctx, filename, pack_file,
-				  path_prefix_filter,  &path_prefix,
-				  use_existing_trace_events,
-				  force_ssd_mode) < 0) {
-		log_error ("Failed to process trace events, exiting.");
-		exit (7);
 	}
 
 	if (file)
