@@ -73,6 +73,14 @@ static int daemonise = 0;
 static int force_trace = 0;
 
 /**
+ * record_and_replay:
+ *
+ * Set to 1 if we should both enable tracing and perform readahead
+ * process. Mutually exclusive from --force-trace and --dump.
+ **/
+static int record_and_replay = 0;
+
+/**
  * timeout:
  *
  * Set to non-zero if we should stop tracing after a particular time,
@@ -210,6 +218,7 @@ static struct option options[] = {
 	{ "dump", no_argument, &dump_pack, 1 },
 	{ "use-existing-trace-events", no_argument, &use_existing_trace_events, 1 },
 	{ "force-ssd-mode", no_argument, &force_ssd_mode, 1 },
+	{ "record-and-replay", no_argument, &record_and_replay, 1 },
 
 	/*
 	 * boolean flags that has a special handling
@@ -239,12 +248,15 @@ print_usage () {
 		"    Detach and run in background\n"
 		"  --force-trace\n"
 		"    Ignore existing pack file and force retracing\n"
-		"    Mutually exclusive with --dump\n"
+		"    Mutually exclusive with --dump and --record-and-replay\n"
+		"  --record-and-replay\n"
+		"    Perform tracing and replaying together\n"
+		"    Mutually exclusive with --force-trace and --dump\n"
 		"  --timeout=SECONDS\n"
 		"    Maximum duration of tracing (default: unset; continue until interrupt)\n"
 		"  --dump\n"
 		"    Dump the specified pack file and exit\n"
-		"    Mutually exclusive with --force-trace\n"
+		"    Mutually exclusive with --force-trace and --record-and-replay\n"
 		"  --sort=(open|path|disk|size)\n"
 		"    Specify how to sort the pack file when dumping (default: open)\n"
 		"  --path-prefix=PREFIX\n"
@@ -399,6 +411,12 @@ main (int   argc,
 		exit (1);
 	}
 
+	if ((dump_pack || force_trace) && record_and_replay) {
+		log_fatal ("--record-and-replay flag is mutually exclusive from "
+			   "--force-trace or --dump. exiting");
+		exit (1);
+	}
+
 	/* Lookup the filename for the pack based on the path given
 	 * (if any).
 	 */
@@ -410,7 +428,33 @@ main (int   argc,
 
 	struct trace_context trace_ctx;
 
-	if (force_trace) {
+	if (record_and_replay) {
+		/* read_pack operation can be costly, enough to lose the earlier
+		 * file access that can be impactful to boot time.
+		 * Enable tracepoints first.
+		 */
+		if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
+			log_fatal ("Failed to enable tracepoints for recording. exiting");
+			exit (6);
+		}
+
+		file = read_pack (filename, dump_pack);
+		if (file) {
+			if (do_readahead (file, daemonise) < 0) {
+				log_fatal ("Failed to perform readahead. exiting");
+				exit (3);
+			}
+		}
+
+		await_for_signal (timeout);
+		if (trace_process_events (&trace_ctx, filename, pack_file,
+					  path_prefix_filter,  &path_prefix,
+					  use_existing_trace_events,
+					  force_ssd_mode) < 0) {
+			log_error ("Failed to process trace events, exiting.");
+			exit (7);
+		}
+	} else if (force_trace) {
 		if (trace_begin (&trace_ctx, daemonise, use_existing_trace_events) < 0) {
 			log_fatal ("Failed to enable tracepoints for recording. exiting");
 			exit (6);
