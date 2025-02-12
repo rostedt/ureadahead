@@ -292,13 +292,13 @@ trace_begin (struct trace_context *ctx,
 	return 0;
 }
 
-void
-trace_cancel (struct trace_context *ctx,
-	      int use_existing_trace_events)
+static int
+trace_disable (struct trace_context *ctx,
+	       int use_existing_trace_events)
 {
-	/* Force-stop and restore every configuration. */
+	int ret = 0;
 	if (ctx->old_tracing_enabled == 0)
-		tracefs_trace_off (NULL);
+		ret = tracefs_trace_off (NULL);
 
 	if (! use_existing_trace_events) {
 		for (int i = 0; i < NR_EVENTS; i++) {
@@ -309,6 +309,20 @@ trace_cancel (struct trace_context *ctx,
 		}
 	}
 
+	return ret;
+}
+
+void
+trace_cancel (struct trace_context *ctx,
+	      int use_existing_trace_events)
+{
+	/* Leave the log in case disabling fails, but continue anyway
+	 * to restore original condition
+	 */
+	if (trace_disable (ctx, use_existing_trace_events) < 0) {
+		log_error ("Failed to set the trace off during canceling: %s",
+			   strerror (errno));
+	}
 	tracefs_instance_set_buffer_size (NULL, ctx->old_buffer_size_kb, -1);
 }
 
@@ -325,19 +339,11 @@ trace_process_events (struct trace_context *ctx,
 	PackFile *files = NULL;
 	size_t    num_files = 0;
 
-	/* Restore previous tracing settings */
-	if (ctx->old_tracing_enabled == 0 && tracefs_trace_off (NULL) < 0) {
+	/* Disable tracing so we can process whats left on the buffer. */
+	if (trace_disable (ctx, use_existing_trace_events) < 0) {
 		log_error ("Failed to set the trace off: %s",
 			   strerror (errno));
 		return -1;
-	}
-	if (! use_existing_trace_events) {
-		for (int i = 0; i < NR_EVENTS; i++) {
-			if (ctx->old_events_enabled[i] > 0)
-				continue;
-			tracefs_event_disable (NULL,
-					       EVENTS[i][0], EVENTS[i][1]);
-		}
 	}
 
 	/* Be nicer */
