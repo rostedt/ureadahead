@@ -1,6 +1,6 @@
 ## Process this file with automake to produce Makefile.in
 
-SUBDIRS = po intl src
+SUBDIRS = src
 
 EXTRA_DIST = config.rpath
 
@@ -10,4 +10,3 @@ dist_man_MANS = \
 	man/ureadahead.8
 
 EXTRA_DIST += 0001-trace-add-trace-events-for-open-exec-an.patch
-

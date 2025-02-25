@@ -43,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <stdbool.h>
 
 #include <blkid.h>
 #define NO_INLINE_FUNCS
@@ -51,8 +52,6 @@
 #include <linux/fs.h>
 #include <linux/fiemap.h>
 
-#include <nih/macros.h>
-#include <nih/main.h>
 #include <tracefs.h>
 
 #include "trace.h"
@@ -187,7 +186,7 @@ static void      fix_path            (char *pathname);
 static int       trace_add_path      (const char *pathname,
 				      PackFile **files, size_t *num_files,
 				      int force_ssd_mode);
-static int       ignore_path         (const char *pathname);
+static bool      ignore_path         (const char *pathname);
 static PackFile *trace_file          (dev_t dev,
 				      PackFile **files, size_t *num_files,
 				      int force_ssd_mode);
@@ -1010,7 +1009,7 @@ trace_add_path (const char *pathname,
 	 * the working directory that they were opened from.
 	 */
 	if (pathname[0] != '/') {
-		log_warn ("%s: %s", pathname, _("Ignored relative path"));
+		log_warn ("%s: Ignored relative path", pathname);
 		return 0;
 	}
 
@@ -1025,7 +1024,7 @@ trace_add_path (const char *pathname,
 	 * pack.
 	 */
 	if (strlen (pathname) > PACK_PATH_MAX) {
-		log_warn ("%s: %s", pathname, _("Ignored far too long path"));
+		log_warn ("%s: Ignored far too long path", pathname);
 		return 0;
 	}
 
@@ -1062,7 +1061,7 @@ trace_add_path (const char *pathname,
 		 * PACK_PATH_MAX.
 		 */
 		if (strlen (resolved_pathname) > PACK_PATH_MAX) {
-			log_warn ("%s: %s", resolved_pathname, _("Ignored far too long path"));
+			log_warn ("%s: Ignored far too long path", resolved_pathname);
 			return 0;
 		}
 
@@ -1084,15 +1083,13 @@ trace_add_path (const char *pathname,
 	 */
 	fd = open (pathname, O_RDONLY | O_NOATIME);
 	if (fd < 0) {
-		log_warn ("%s: %s: %s", pathname,
-			  _("File vanished or error reading"),
+		log_warn ("%s: File vanished or error reading: %s", pathname,
 			  strerror (errno));
 		return -1;
 	}
 
 	if (fstat (fd, &statbuf) < 0) {
-		log_warn ("%s: %s: %s", pathname,
-			  _("Error retrieving file stat"),
+		log_warn ("%s: Error retrieving file stat: %s", pathname,
 			  strerror (errno));
 		close (fd);
 		return -1;
@@ -1162,29 +1159,29 @@ trace_add_path (const char *pathname,
 	return 0;
 }
 
-static int
+static bool
 ignore_path (const char *pathname)
 {
 	assert (pathname != NULL);
 
 	if (! strncmp (pathname, "/proc/", 6))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/sys/", 5))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/dev/", 5))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/tmp/", 5))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/run/", 5))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/var/run/", 9))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/var/log/", 9))
-		return TRUE;
+		return true;
 	if (! strncmp (pathname, "/var/lock/", 10))
-		return TRUE;
+		return true;
 
-	return FALSE;
+	return false;
 }
 
 
@@ -1208,11 +1205,11 @@ trace_file (dev_t       dev,
 			return &(*files)[i];
 
 	if (force_ssd_mode) {
-		rotational = FALSE;
+		rotational = 0;
 	} else {
 		/* Query sysfs to see whether this disk is rotational; this
 		 * obviously won't work for virtual devices and the like, so
-		 * default to TRUE for now.
+		 * default to true for now.
 		 */
 		written = asprintf (&filename, "/sys/dev/block/%d:%d/queue/rotational",
 				    major (dev), minor (dev));
@@ -1228,9 +1225,9 @@ trace_file (dev_t       dev,
 		}
 
 		if (get_value (AT_FDCWD, filename, &rotational) < 0) {
-			log_warn (_("Unable to obtain rotationalness for device %u:%u"),
+			log_warn ("Unable to obtain rotationalness for device %u:%u",
 				major (dev), minor (dev));
-			rotational = TRUE;
+			rotational = 1;
 		}
 	}
 
@@ -1278,8 +1275,8 @@ trace_add_chunks (PackFile *file,
 	/* Map the file into memory */
 	buf = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 	if (buf == MAP_FAILED) {
-		log_warn ("%s: %s: %s", path->path,
-			  _("Error mapping into memory"),
+		log_warn ("%s: Error mapping into memory: %s",
+			  path->path,
 			  strerror (errno));
 		return -1;
 	}
@@ -1291,8 +1288,8 @@ trace_add_chunks (PackFile *file,
 	memset (vec, 0, num_pages);
 
 	if (mincore (buf, size, vec) < 0) {
-		log_warn ("%s: %s: %s", path->path,
-			  _("Error retrieving page cache info"),
+		log_warn ("%s: Error retrieving page cache info: %s",
+			  path->path,
 			  strerror (errno));
 		munmap (buf, size);
 		free (vec);
@@ -1301,8 +1298,8 @@ trace_add_chunks (PackFile *file,
 
 	/* Clean up */
 	if (munmap (buf, size) < 0) {
-		log_warn ("%s: %s: %s", path->path,
-			  _("Error unmapping from memory"),
+		log_warn ("%s: Error unmapping from memory: %s",
+			  path->path,
 			  strerror (errno));
 		free (vec);
 		return -1;

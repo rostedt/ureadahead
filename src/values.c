@@ -38,8 +38,6 @@
 #include <stdlib.h> /* for atoi */
 #include <unistd.h>
 
-#include <nih/macros.h>
-
 #include "values.h"
 #include "logging.h"
 
