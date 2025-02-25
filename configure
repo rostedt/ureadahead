@@ -17,6 +17,10 @@
 ## M4sh Initialization. ##
 ## -------------------- ##
 
+# Added to fix time stamps
+
+touch Makefile.am Makefile.in aclocal.m4 configure config.h.in
+
 # Be more Bourne compatible
 DUALCASE=1; export DUALCASE # for MKS sh
 as_nop=:
