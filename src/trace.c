@@ -1139,8 +1139,10 @@ trace_add_path (const char *pathname,
 		assert (inode_hash != NULL);
 	}
 
-	if (! maybe_insert_dev_inode_pair (inode_hash, statbuf.st_dev, statbuf.st_ino))
+	if (! maybe_insert_dev_inode_pair (inode_hash, statbuf.st_dev, statbuf.st_ino)) {
+		close (fd);
 		return 0;
+	}
 
 	/* There's also no point reading zero byte files, since they
 	 * won't have any blocks (and we can't mmap zero bytes anyway).
